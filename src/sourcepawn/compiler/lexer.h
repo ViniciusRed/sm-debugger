@@ -1,4 +1,4 @@
-// vim: set ts=8 sts=2 sw=2 tw=99 et:
+// vim: set ts=8 sts=4 sw=4 tw=99 et:
 //
 //  Copyright (c) ITB CompuPhase, 1997-2006
 //
@@ -19,40 +19,28 @@
 //  3.  This notice may not be removed or altered from any source distribution.
 #pragma once
 
+#include <amtl/am-hashtable.h>
 #include <amtl/am-string.h>
+#include <amtl/am-vector.h>
+#include <shared/string-pool.h>
 
+#include "compile-options.h"
 #include "sc.h"
 
-// The method name buffer is larger since we can include our parent class's
-// name, a "." to separate it, a "~" for constructors, or a ".get/.set" for
-// accessors.
-#define METHOD_NAMEMAX sNAMEMAX * 2 + 6
-
+class CompileContext;
 class Type;
 
 struct token_pos_t {
-    int file;
-    int line;
-    int col;
-};
-
-// Helper for token info.
-struct token_t {
-    int id;
-    cell val;
-    char* str;
-};
-
-struct token_ident_t {
-    token_t tok;
-    char name[METHOD_NAMEMAX + 1];
+    int file = 0;
+    int line = 0;
+    int col = 0;
 };
 
 struct full_token_t {
-    int id;
-    int value;
-    char str[sLINEMAX + 1];
-    size_t len;
+    int id = 0;
+    int value = 0;
+    std::string data;
+    sp::Atom* atom = nullptr;
     token_pos_t start;
     token_pos_t end;
 };
@@ -61,13 +49,13 @@ struct full_token_t {
 
 struct token_buffer_t {
     // Total number of tokens parsed.
-    int num_tokens;
+    int num_tokens = 0;
 
     // Number of tokens that we've rewound back to.
-    int depth;
+    int depth = 0;
 
     // Most recently fetched token.
-    int cursor;
+    int cursor = 0;
 
     // Circular token buffer.
     full_token_t tokens[MAX_TOKEN_DEPTH];
@@ -129,6 +117,7 @@ enum TokenKind {
     tENUM,
     tEXIT,
     tEXPLICIT,
+    tFALSE,
     tFINALLY,
     tFOR,
     tFOREACH,
@@ -166,11 +155,13 @@ enum TokenKind {
     tSEALED,
     tSIZEOF,
     tSTATIC,
+    tSTATIC_ASSERT,
     tSTOCK,
     tSTRUCT,
     tSWITCH,
     tTHIS,
     tTHROW,
+    tTRUE,
     tTRY,
     tTYPEDEF,
     tTYPEOF,
@@ -200,7 +191,6 @@ enum TokenKind {
     tpENDSCRPT,
     tpERROR,
     tpWARNING,
-    tpFILE,
     tpIF, /* #if */
     tINCLUDE,
     tpLINE,
@@ -217,8 +207,9 @@ enum TokenKind {
     tSYMBOL,
     tLABEL,
     tSTRING,
-    tPENDING_STRING, /* string, but not yet dequeued */
     tEXPR,           /* for assigment to "lastst" only (see SC1.C) */
+    tSYN_PRAGMA_UNUSED,
+    tSYN_INCLUDE_PATH,
     tENDLESS,        /* endless loop, for assigment to "lastst" only */
     tEMPTYBLOCK,     /* empty blocks for AM bug 4825 */
     tEOL,            /* newline, only returned by peek_new_line() */
@@ -262,47 +253,173 @@ IsAssignOp(int token)
     }
 }
 
-int plungequalifiedfile(char* name); /* explicit path included */
-int plungefile(char* name, int try_currentpath,
-               int try_includepaths); /* search through "include" paths */
-void preprocess(void);
-void lexinit(void);
-int lex(cell* lexvalue, char** lexsym);
-int lextok(token_t* tok);
-int lexpeek(int id);
-void lexpush(void);
-void lexclr(int clreol);
-const token_pos_t& current_pos();
-int matchtoken(int token);
-int tokeninfo(cell* val, char** str);
-int needtoken(int token);
-int matchtoken2(int id, token_t* tok);
-int expecttoken(int id, token_t* tok);
-int matchsymbol(token_ident_t* ident);
-int needsymbol(token_ident_t* ident);
-int peek_same_line();
-void litadd(cell value);
-void litinsert(cell value, int pos);
+void litadd_str(const char* str, size_t len, std::vector<cell>* out);
 int alphanum(char c);
 int ishex(char c);
 int isoctal(char c);
-void delete_symbol(symbol* root, symbol* sym);
-void delete_symbols(symbol* root, int level, int delete_functions);
-void markusage(symbol* sym, int usage);
-symbol* findglb(const char* name);
-symbol* findloc(const char* name);
-symbol* findconst(const char* name);
-symbol* find_enumstruct_field(Type* type, const char* name);
-symbol* addsym(const char* name, cell addr, int ident, int vclass, int tag);
-symbol* addvariable(const char* name, cell addr, int ident, int vclass, int tag, int dim[],
-                    int numdim, int idxtag[]);
-symbol* addvariable2(const char* name, cell addr, int ident, int vclass, int tag, int dim[],
-                     int numdim, int idxtag[], int slength);
-symbol* addvariable3(declinfo_t* decl, cell addr, int vclass, int slength);
 int getlabel(void);
-char* itoh(ucell val);
-ke::AString get_token_string(int tok_id);
+std::string get_token_string(int tok_id);
+int alpha(char c);
 
-enum class TerminatorPolicy { Newline, NewlineOrSemicolon, Semicolon };
+enum class TerminatorPolicy {
+    Newline,
+    NewlineOrSemicolon,
+    Semicolon
+};
 
-int require_newline(TerminatorPolicy policy);
+static constexpr int SKIPMODE = 1;     /* bit field in "#if" stack */
+static constexpr int PARSEMODE = 2;    /* bit field in "#if" stack */
+static constexpr int HANDLED_ELSE = 4; /* bit field in "#if" stack */
+
+class Lexer
+{
+    friend class MacroProcessor;
+
+  public:
+    Lexer(CompileContext& cc);
+
+    int lex();
+    int lex_same_line();
+    bool peek(int id);
+    bool match(int token);
+    bool need(int token);
+    bool matchsymbol(sp::Atom** atom);
+    bool needsymbol(sp::Atom** atom);
+    int require_newline(TerminatorPolicy policy);
+    int peek_same_line();
+    void lexpush();
+    void lexclr(int clreol);
+
+    void Init(std::shared_ptr<SourceFile> sf);
+    void Start();
+    bool PlungeFile(const char* name, int try_currentpath, int try_includepaths);
+    void Preprocess(bool allow_synthesized_tokens);
+    void AddMacro(const char* pattern, size_t length, const char* subst);
+    bool NeedSemicolon();
+
+    full_token_t lex_tok() {
+        lex();
+        return *current_token();
+    }
+    full_token_t* current_token() {
+        return &token_buffer_->tokens[token_buffer_->cursor];
+    }
+    const token_pos_t& pos() { return current_token()->start; }
+    std::vector<bool>& need_semicolon_stack() { return need_semicolon_stack_; }
+    std::string& deprecate() { return deprecate_; }
+    bool& allow_tags() { return allow_tags_; }
+    int& require_newdecls() { return require_newdecls_stack_.back(); }
+    int& stmtindent() { return stmtindent_; }
+    bool& indent_nowarn() { return indent_nowarn_; }
+    bool freading() const { return freading_; }
+    int fcurrent() const { return fcurrent_; }
+    unsigned fline() const { return fline_; }
+    unsigned char* pline() { return pline_; }
+
+    bool HasMacro(sp::Atom* name) { return FindMacro(name->chars(), name->length(), nullptr); }
+
+    struct macro_t {
+        const char* first;
+        const char* second;
+    };
+
+    const unsigned char* lptr = nullptr;                  /* points to the current position in "pline" */
+
+  private:
+    void LexOnce(full_token_t* tok);
+    void PreprocessInLex(bool allow_synthesized_tokens);
+    void Readline(unsigned char* line);
+    void StripComments(unsigned char* line);
+    int DoCommand(bool allow_synthesized_tokens);
+    int ScanEllipsis(const unsigned char* lptr);
+    bool LexSymbolOrKeyword(full_token_t* tok);
+    int LexKeywordImpl(const char* match, size_t length);
+    bool LexKeyword(full_token_t* tok, const char* token_start, size_t len);
+    void LexStringLiteral(full_token_t* tok);
+    bool PlungeQualifiedFile(const char* name);
+    full_token_t* PushSynthesizedToken(TokenKind kind, int col);
+    void SynthesizeIncludePathToken();
+    void SetFileDefines(std::string file);
+
+    full_token_t* advance_token_ptr();
+    full_token_t* next_token();
+    void lexpop();
+    int preproc_expr(cell* val, int* tag);
+    void substallpatterns(unsigned char* line, int buffersize);
+    bool substpattern(unsigned char* line, size_t buffersize, const char* pattern,
+                      const char* substitution, int& patternLen, int& substLen);
+    void lex_symbol(full_token_t* tok, const char* token_start, size_t len);
+    bool lex_match_char(char c);
+    bool lex_number(full_token_t* tok);
+    cell litchar(const unsigned char** lptr, int flags);
+    const unsigned char* skipstring(const unsigned char* string);
+    const unsigned char* skippgroup(const unsigned char* string);
+    void packedstring(const unsigned char* lptr, int flags, full_token_t* tok);
+
+    bool IsSkipping() const {
+        return skiplevel_ > 0 && (ifstack_[skiplevel_ - 1] & SKIPMODE) == SKIPMODE;
+    }
+
+    bool FindMacro(const char* name, size_t length, macro_t* macro);
+    bool DeleteMacro(const char* name, size_t length);
+
+  private:
+    CompileContext& cc_;
+    ke::HashMap<sp::CharsAndLength, int, KeywordTablePolicy> keywords_;
+    short icomment_; /* currently in multiline comment? */
+    std::vector<short> comment_stack_;
+    std::vector<size_t> preproc_if_stack_;
+    std::vector<char> ifstack_;
+    size_t iflevel_;             /* nesting level if #if/#else/#endif */
+    size_t skiplevel_; /* level at which we started skipping (including nested #if .. #endif) */
+    int listline_ = -1; /* "current line" for the list file */
+    int lexnewline_;
+    std::string deprecate_;
+    bool allow_tags_ = true;
+    int stmtindent_ = 0;
+    bool indent_nowarn_ = false;
+    bool freading_ = false;
+    int fcurrent_ = 0;
+    unsigned fline_ = 0;
+    unsigned char pline_[sLINEMAX + 1];         /* the line read from the input file */
+    int ctrlchar_ = CTRL_CHAR;
+
+    std::shared_ptr<SourceFile> inpf_;
+
+    token_buffer_t normal_buffer_;;
+    token_buffer_t preproc_buffer_;
+    token_buffer_t* token_buffer_;
+
+    char literal_buffer_[sLINEMAX + 1];
+
+    struct MacroTablePolicy {
+        static bool matches(const std::string& a, const std::string& b) {
+            return a == b;
+        }
+        static bool matches(const sp::CharsAndLength& a, const std::string& b) {
+            if (a.length() != b.length())
+                return false;
+            return strncmp(a.str(), b.c_str(), a.length()) == 0;
+        }
+        static uint32_t hash(const std::string& key) {
+            return ke::HashCharSequence(key.c_str(), key.length());
+        }
+        static uint32_t hash(const sp::CharsAndLength& key) {
+            return ke::HashCharSequence(key.str(), key.length());
+        }
+    };
+
+    struct MacroEntry {
+        std::string first;
+        std::string second;
+        std::string documentation;
+        bool deprecated;
+    };
+    ke::HashMap<std::string, MacroEntry, MacroTablePolicy> macros_;
+
+    std::vector<short> current_file_stack_;
+    std::vector<int> current_line_stack_;
+    std::vector<std::shared_ptr<SourceFile>> input_file_stack_;
+    std::vector<bool> need_semicolon_stack_;
+    std::vector<int> require_newdecls_stack_;
+};

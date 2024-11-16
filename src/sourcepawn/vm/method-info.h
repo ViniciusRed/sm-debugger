@@ -28,14 +28,7 @@ class MethodInfo final : public ke::Refcounted<MethodInfo>
   MethodInfo(PluginRuntime* rt, uint32_t codeOffset);
   ~MethodInfo();
 
-  int Validate() {
-    if (!checked_) {
-      InternalValidate();
-      graph_ = nullptr;
-    }
-    return validation_error_;
-  }
-  ke::RefPtr<ControlFlowGraph> ValidateWithGraph() {
+  ke::RefPtr<ControlFlowGraph> Validate() {
     if (!checked_ || !graph_)
       InternalValidate();
     return graph_.take();
@@ -53,7 +46,7 @@ class MethodInfo final : public ke::Refcounted<MethodInfo>
 
   void setCompiledFunction(CompiledFunction* fun);
   CompiledFunction* jit() const {
-    return jit_;
+    return jit_.get();
   }
 
  private:
@@ -62,7 +55,7 @@ class MethodInfo final : public ke::Refcounted<MethodInfo>
  private:
   PluginRuntime* rt_;
   uint32_t pcode_offset_;
-  ke::AutoPtr<CompiledFunction> jit_;
+  std::unique_ptr<CompiledFunction> jit_;
   ke::RefPtr<ControlFlowGraph> graph_;
 
   bool checked_;

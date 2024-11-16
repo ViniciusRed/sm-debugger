@@ -1,4 +1,6 @@
-/*  Codepage translation to Unicode, and UTF-8 support
+/*  vim: set sts=4 sw=4 tw=99 ts=8 et:
+ *
+ *  Codepage translation to Unicode, and UTF-8 support
  *
  *  The translation is based on codepage mapping files that are distributed
  *  by the Unicode consortium, see ftp://ftp.unicode.org/Public/MAPPINGS/.
@@ -38,30 +40,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "errors.h"
-#include "libpawnc.h"
 #include "sc.h"
 #include "scvars.h"
-
-#if !defined TRUE
-#    define FALSE 0
-#    define TRUE 1
-#endif
-#if !defined _MAX_PATH
-#    define _MAX_PATH 250
-#endif
-#if !defined DIRSEP_CHAR
-#    if defined __linux__ || defined __FreeBSD__ || defined __OpenBSD__
-#        define DIRSEP_CHAR '/'
-#    elif defined macintosh
-#        define DIRSEP_CHAR ':'
-#    else
-#        define DIRSEP_CHAR '\\'
-#    endif
-#endif
-
-#if !defined ELEMENTS
-#    define ELEMENTS(array) (sizeof(array) / sizeof(array[0]))
-#endif
 
 cell
 get_utf8_char(const unsigned char* string, const unsigned char** endptr)
@@ -142,17 +122,17 @@ get_utf8_char(const unsigned char* string, const unsigned char** endptr)
 }
 
 void
-skip_utf8_bom(void* fp)
+skip_utf8_bom(SourceFile* fp)
 {
-    void* resetpos = pc_getpossrc(fp);
+    auto resetpos = fp->Pos();
 
     static const size_t kBomSize = 3;
     unsigned char bom[kBomSize + 1];
-    if (!pc_readsrc(fp, bom, kBomSize))
+    if (!fp->Read(bom, kBomSize))
         return;
 
     if (bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf)
         return;
 
-    pc_resetsrc(fp, resetpos);
+    fp->Reset(resetpos);
 }

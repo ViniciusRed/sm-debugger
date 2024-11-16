@@ -23,8 +23,11 @@
  *
  *  Version: $Id$
  */
-#include "types.h"
 #include <ctype.h>
+
+#include <utility>
+
+#include "types.h"
 #include "sc.h"
 #include "sctracker.h"
 #include "scvars.h"
@@ -33,7 +36,7 @@ using namespace ke;
 
 TypeDictionary gTypes;
 
-Type::Type(const char* name, cell value)
+Type::Type(sp::Atom* name, cell value)
  : name_(name),
    value_(value),
    fixed_(0),
@@ -76,6 +79,8 @@ Type::prettyName() const
 {
   if (kind_ == TypeKind::Function)
     return kindName();
+  if (tagid() == 0)
+    return "int";
   return name();
 }
 
@@ -95,9 +100,9 @@ Type::kindName() const
       return "object";
     case TypeKind::Function:
       if (funcenum_ptr_) {
-        if (funcenum_ptr_->entries.length() > 1)
+        if (funcenum_ptr_->entries.size() > 1)
           return "typeset";
-        if (name_.startsWith("::"))
+        if (ke::StartsWith(name_->chars(), "::"))
           return "function";
         return "typedef";
       }
@@ -107,13 +112,21 @@ Type::kindName() const
   }
 }
 
+bool
+Type::isLabelTag() const
+{
+    if (tagid() == 0 || tagid() == pc_tag_bool || tagid() == sc_rationaltag)
+        return false;
+    return kind_ == TypeKind::None;
+}
+
 TypeDictionary::TypeDictionary() {}
 
 Type*
-TypeDictionary::find(const char* name)
+TypeDictionary::find(sp::Atom* name)
 {
     for (const auto& type : types_) {
-        if (strcmp(type->name(), name) == 0)
+        if (type->nameAtom() == name)
             return type.get();
     }
     return nullptr;
@@ -122,7 +135,7 @@ TypeDictionary::find(const char* name)
 Type*
 TypeDictionary::find(int tag)
 {
-    assert(size_t(tag) < types_.length());
+    assert(size_t(tag) < types_.size());
 
     return types_[tag].get();
 }
@@ -130,14 +143,15 @@ TypeDictionary::find(int tag)
 Type*
 TypeDictionary::findOrAdd(const char* name)
 {
+    sp::Atom* atom = gAtoms.add(name);
     for (const auto& type : types_) {
-        if (strcmp(type->name(), name) == 0)
+        if (type->nameAtom() == atom)
             return type.get();
     }
 
-    int tag = int(types_.length());
-    UniquePtr<Type> type = MakeUnique<Type>(name, tag);
-    types_.append(Move(type));
+    int tag = int(types_.size());
+    std::unique_ptr<Type> type = std::make_unique<Type>(atom, tag);
+    types_.push_back(std::move(type));
     return types_.back().get();
 }
 
@@ -160,18 +174,18 @@ TypeDictionary::init()
     Type* type = findOrAdd("_");
     assert(type->tagid() == 0);
 
-    type = findOrAdd("bool");
+    type = defineBool();
     assert(type->tagid() == 1);
 
-    pc_anytag = defineAny()->tagid();
-    pc_functag = defineFunction("Function", nullptr)->tagid();
+    pc_tag_bool = type->tagid();
+    tag_any_ = defineAny()->tagid();
+    tag_function_ = defineFunction("Function", nullptr)->tagid();
     pc_tag_string = defineString()->tagid();
     sc_rationaltag = defineFloat()->tagid();
-    pc_tag_void = defineVoid()->tagid();
-    pc_tag_object = defineObject("object")->tagid();
-    pc_tag_bool = defineBool()->tagid();
-    pc_tag_null_t = defineObject("null_t")->tagid();
-    pc_tag_nullfunc_t = defineObject("nullfunc_t")->tagid();
+    tag_void_ = defineVoid()->tagid();
+    tag_object_ = defineObject("object")->tagid();
+    tag_null_ = defineObject("null_t")->tagid();
+    tag_nullfunc_ = defineObject("nullfunc_t")->tagid();
 
     for (const auto& type : types_)
         type->setIntrinsic();
@@ -270,4 +284,18 @@ TypeDictionary::definePStruct(const char* name, pstruct_t* ps)
     Type* type = findOrAdd(name);
     type->setStruct(ps);
     return type;
+}
+
+const char*
+pc_tagname(int tag)
+{
+    if (Type* type = gTypes.find(tag))
+        return type->name();
+    return "__unknown__";
+}
+
+bool
+typeinfo_t::isCharArray() const
+{
+    return numdim() == 1 && tag() == pc_tag_string;
 }

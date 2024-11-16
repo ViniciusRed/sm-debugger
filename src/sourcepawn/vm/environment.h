@@ -13,10 +13,12 @@
 #ifndef _include_sourcepawn_vm_environment_h_
 #define _include_sourcepawn_vm_environment_h_
 
+#include <memory>
+
 #include <sp_vm_api.h>
 #include <amtl/am-cxx.h>
 #include <amtl/am-inlinelist.h>
-#include <amtl/am-thread-utils.h>
+#include <amtl/am-mutex.h>
 #include "code-allocator.h"
 #include "plugin-runtime.h"
 #include "stack-frames.h"
@@ -30,6 +32,13 @@ class CodeStubs;
 class WatchdogTimer;
 class ErrorReport;
 class BuiltinNatives;
+struct CodeDebugMapping;
+using CodeDebugMap = std::vector<CodeDebugMapping>;
+
+#if defined(KE_LINUX)
+class PerfJitFile;
+class PerfJitdumpFile;
+#endif
 
 // An Environment encapsulates everything that's needed to load and run
 // instances of plugins on a single thread. There can be at most one
@@ -62,6 +71,7 @@ class Environment : public ISourcePawnEnvironment
   bool HasPendingException(const ExceptionHandler* handler) override;
   const char* GetPendingExceptionMessage(const ExceptionHandler* handler) override;
   bool EnableDebugBreak() override;
+  void SetDebugMetadataFlags(int flags) override;
 
   // Runtime functions.
   const char* GetErrorString(int err);
@@ -74,12 +84,13 @@ class Environment : public ISourcePawnEnvironment
 
   // Allocate and free executable memory.
   CodeChunk AllocateCode(size_t size);
+  void WriteDebugMetadata(void* address, uint64_t length, const char* symbol, const CodeDebugMap& mapping);
 
   CodeStubs* stubs() {
-    return code_stubs_;
+    return code_stubs_.get();
   }
   BuiltinNatives* builtins() {
-    return builtins_;
+    return builtins_.get();
   }
 
   // Runtime management.
@@ -87,8 +98,8 @@ class Environment : public ISourcePawnEnvironment
   void DeregisterRuntime(PluginRuntime* rt);
   void PatchAllJumpsForTimeout();
   void UnpatchAllJumpsFromTimeout();
-  ke::Mutex* lock() {
-    return &mutex_;
+  ke::Mutex& lock() {
+    return mutex_;
   }
 
   bool Invoke(PluginContext* cx, const RefPtr<MethodInfo>& method, cell_t* result);
@@ -127,8 +138,12 @@ class Environment : public ISourcePawnEnvironment
     return debug_break_handler_;
   }
 
+  int GetDebugMetadataFlags() const {
+    return debug_metadata_flags_;
+  }
+
   WatchdogTimer* watchdog() const {
-    return watchdog_timer_;
+    return watchdog_timer_.get();
   }
 
   bool hasPendingException() const;
@@ -175,10 +190,10 @@ class Environment : public ISourcePawnEnvironment
   void DispatchReport(const ErrorReport& report);
 
  private:
-  ke::AutoPtr<ISourcePawnEngine> api_v1_;
-  ke::AutoPtr<ISourcePawnEngine2> api_v2_;
-  ke::AutoPtr<WatchdogTimer> watchdog_timer_;
-  ke::AutoPtr<BuiltinNatives> builtins_;
+  std::unique_ptr<ISourcePawnEngine> api_v1_;
+  std::unique_ptr<ISourcePawnEngine2> api_v2_;
+  std::unique_ptr<WatchdogTimer> watchdog_timer_;
+  std::unique_ptr<BuiltinNatives> builtins_;
   ke::Mutex mutex_;
 
   bool debug_break_enabled_;
@@ -189,12 +204,23 @@ class Environment : public ISourcePawnEnvironment
   int exception_code_;
   char exception_message_[1024];
 
+  int debug_metadata_flags_;
+
+#if defined(KE_LINUX)
+  // There can only be one of each of these per process, as the filenames are
+  // only distinguished by PID (although jitdump does internally support per-
+  // thread metadata). Once we support multiple environments per process we'll
+  // need to globalise these and add internal locking.
+  std::unique_ptr<PerfJitFile> perf_jit_file_;
+  std::unique_ptr<PerfJitdumpFile> perf_jitdump_file_;
+#endif
+
   IProfilingTool* profiler_;
   bool jit_enabled_;
   bool profiling_enabled_;
 
-  ke::AutoPtr<CodeAllocator> code_alloc_;
-  ke::AutoPtr<CodeStubs> code_stubs_;
+  std::unique_ptr<CodeAllocator> code_alloc_;
+  std::unique_ptr<CodeStubs> code_stubs_;
 
   ke::InlineList<PluginRuntime> runtimes_;
 

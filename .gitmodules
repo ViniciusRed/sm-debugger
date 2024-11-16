@@ -10,3 +10,6 @@
 [submodule "dep/hl2sdk"]
 	path = dep/hl2sdk
 	url = https://github.com/alliedmodders/hl2sdk
+[submodule "src/sourcepawn"]
+	path = src/sourcepawn
+	url = https://github.com/alliedmodders/sourcepawn

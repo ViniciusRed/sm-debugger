@@ -19,7 +19,8 @@
 #include "method-info.h"
 #include "compiled-function.h"
 #include "code-stubs.h"
-#ifndef KE_EMSCRIPTEN
+#include "debug-metadata.h"
+#if defined(SP_HAS_JIT)
 #include "jit.h"
 #endif
 #include "interpreter.h"
@@ -38,6 +39,7 @@ Environment::Environment()
    debugger_(nullptr),
    eh_top_(nullptr),
    exception_code_(SP_ERROR_NONE),
+   debug_metadata_flags_(JIT_DEBUG_DELETE_ON_EXIT | JIT_DEBUG_PERF_BASIC),
    profiler_(nullptr),
 #if defined(SP_HAS_JIT)
    jit_enabled_(true),
@@ -45,6 +47,7 @@ Environment::Environment()
    jit_enabled_(false),
 #endif
    profiling_enabled_(false),
+   code_stubs_(nullptr),
    top_(nullptr)
 {
 }
@@ -80,16 +83,12 @@ bool
 Environment::Initialize()
 {
   PoolAllocator::InitDefault();
-  api_v1_ = new SourcePawnEngine();
-  api_v2_ = new SourcePawnEngine2();
-  watchdog_timer_ = new WatchdogTimer(this);
-  builtins_ = new BuiltinNatives();
-  code_alloc_ = new CodeAllocator();
-  code_stubs_ = new CodeStubs(this);
+  api_v1_ = std::make_unique<SourcePawnEngine>();
+  api_v2_ = std::make_unique<SourcePawnEngine2>();
+  watchdog_timer_ = std::make_unique<WatchdogTimer>(this);
+  builtins_ = std::make_unique<BuiltinNatives>();
+  code_alloc_ = std::make_unique<CodeAllocator>();
 
-  // Safe to initialize code now that we have the code cache.
-  if (!code_stubs_->Initialize())
-    return false;
   if (!builtins_->Initialize())
     return false;
 
@@ -127,6 +126,12 @@ Environment::EnableDebugBreak()
 }
 
 void
+Environment::SetDebugMetadataFlags(int flags)
+{
+  debug_metadata_flags_ = flags;
+}
+
+void
 Environment::EnableProfiling()
 {
   profiling_enabled_ = !!profiler_;
@@ -147,13 +152,13 @@ Environment::InstallWatchdogTimer(int timeout_ms)
 ISourcePawnEngine*
 Environment::APIv1()
 {
-  return api_v1_;
+  return api_v1_.get();
 }
 
 ISourcePawnEngine2*
 Environment::APIv2()
 {
-  return api_v2_;
+  return api_v2_.get();
 }
 
 static const char* sErrorMsgTable[] = 
@@ -208,6 +213,40 @@ Environment::AllocateCode(size_t size)
 }
 
 void
+Environment::WriteDebugMetadata(void* address, uint64_t length, const char* symbol, const CodeDebugMap& mapping)
+{
+  // Some other debug info consumers we might want to implement here:
+  //
+  // * Intel VTune
+  //   https://github.com/intel/ittapi
+  //   Would give us profiling coverage on non-Linux.
+  //   Very similar input (and use case) as perf, requires linking Intel code in though.
+  //
+  // * GDB JIT Interface
+  //   https://sourceware.org/gdb/current/onlinedocs/gdb/JIT-Interface.html
+  //   Lets GDB show JIT frames when debugging, with source info.
+  //   Requires generating full ELF + DWARF objects in memory.
+
+#if defined(KE_LINUX)
+  if (!perf_jit_file_ && (debug_metadata_flags_ & JIT_DEBUG_PERF_BASIC) != 0) {
+    perf_jit_file_ = std::make_unique<PerfJitFile>((debug_metadata_flags_ & JIT_DEBUG_DELETE_ON_EXIT) != 0);
+  }
+
+  if (perf_jit_file_) {
+    perf_jit_file_->Write(address, length, symbol);
+  }
+
+  if (!perf_jitdump_file_ && (debug_metadata_flags_ & JIT_DEBUG_PERF_JITDUMP) != 0) {
+    perf_jitdump_file_ = std::make_unique<PerfJitdumpFile>((debug_metadata_flags_ & JIT_DEBUG_DELETE_ON_EXIT) != 0);
+  }
+
+  if (perf_jitdump_file_) {
+    perf_jitdump_file_->Write(address, length, symbol, mapping);
+  }
+#endif
+}
+
+void
 Environment::RegisterRuntime(PluginRuntime* rt)
 {
   mutex_.AssertCurrentThreadOwns();
@@ -237,8 +276,8 @@ Environment::PatchAllJumpsForTimeout()
   for (ke::InlineList<PluginRuntime>::iterator iter = runtimes_.begin(); iter != runtimes_.end(); iter++) {
     PluginRuntime* rt = *iter;
 
-    const Vector<RefPtr<MethodInfo>>& methods = rt->AllMethods();
-    for (size_t i = 0; i < methods.length(); i++) {
+    const std::vector<RefPtr<MethodInfo>>& methods = rt->AllMethods();
+    for (size_t i = 0; i < methods.size(); i++) {
       CompiledFunction* fun = methods[i]->jit();
       if (!fun)
         continue;
@@ -258,8 +297,8 @@ Environment::UnpatchAllJumpsFromTimeout()
   for (ke::InlineList<PluginRuntime>::iterator iter = runtimes_.begin(); iter != runtimes_.end(); iter++) {
     PluginRuntime* rt = *iter;
 
-    const Vector<RefPtr<MethodInfo>>& methods = rt->AllMethods();
-    for (size_t i = 0; i < methods.length(); i++) {
+    const std::vector<RefPtr<MethodInfo>>& methods = rt->AllMethods();
+    for (size_t i = 0; i < methods.size(); i++) {
       CompiledFunction* fun = methods[i]->jit();
       if (!fun)
         continue;
@@ -279,6 +318,17 @@ Environment::Invoke(PluginContext* cx,
 {
 #if defined(SP_HAS_JIT)
   if (jit_enabled_) {
+    if (!code_stubs_) {
+      code_stubs_ = std::make_unique<CodeStubs>(this);
+
+      // We delay initializing this to here to avoid executing any generated code if the embedder
+      // doesn't want the JIT enabled. The debug metadata flags must be set before this point.
+      if (!code_stubs_->Initialize()) {
+        code_stubs_ = nullptr;
+        return false;
+      }
+    }
+
     if (!method->jit()) {
       int err = SP_ERROR_NONE;
       if (!CompilerBase::Compile(cx, method, &err)) {
@@ -301,10 +351,12 @@ Environment::Invoke(PluginContext* cx,
 #endif
 
   // The JIT performs its own validation. Handle the interpreter here.
-  int err = method->Validate();
-  if (err != SP_ERROR_NONE) {
-    cx->ReportErrorNumber(err);
-    return false;
+  {
+    auto graph = method->Validate();
+    if (!graph) {
+      cx->ReportErrorNumber(method->validationError());
+      return false;
+    }
   }
 
   return Interpreter::Run(cx, method, result);
@@ -512,4 +564,10 @@ void
 Environment::leaveInvoke()
 {
   top_ = top_->prev();
+}
+
+ISourcePawnEnvironment*
+ISourcePawnEnvironment::New()
+{
+  return Environment::New();
 }

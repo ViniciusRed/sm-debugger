@@ -1,4 +1,4 @@
-// vim: set ts=4 sw=4 tw=99 noet:
+// vim: set ts=8 sts=4 sw=4 tw=99 et:
 //
 // Copyright (C) 2006-2015 AlliedModders LLC
 //
@@ -23,8 +23,8 @@
 #include "sp_vm_types.h"
 
 /** SourcePawn Engine API Versions */
-#define SOURCEPAWN_ENGINE2_API_VERSION 0xC
-#define SOURCEPAWN_API_VERSION 0x020E
+#define SOURCEPAWN_ENGINE2_API_VERSION 0x10
+#define SOURCEPAWN_API_VERSION 0x0213
 
 namespace SourceMod {
 struct IdentityToken_t;
@@ -58,9 +58,54 @@ enum SP_NULL_TYPE {
     SP_NULL_STRING = 1, /**< const String[1] reference */
 };
 
+enum {
+  // If this flag is set, any metadata files generated will be deleted at the end of the process.
+  // This is useful when paired with lightweight metadata, as it allows attaching to a running
+  // process without filling up the disk. Enabled by default.
+  JIT_DEBUG_DELETE_ON_EXIT = (1 << 0),
+
+  // Enables output of function name mappings for perf. Linux only, enabled by default.
+  JIT_DEBUG_PERF_BASIC = (1 << 1),
+
+  // Enables output of full function metadata for perf in the jitdump format.
+  // Includes names, bytecode, and source file mappings. Linux only.
+  JIT_DEBUG_PERF_JITDUMP = (1 << 2),
+};
+
+// @brief Interface for a refcounted objects.
+class IRefcountedObject
+{
+  public:
+    // Virtual destructor.
+    virtual ~IRefcountedObject() {}
+
+    // @brief Increase the object's reference count.
+    virtual void AddRef() = 0;
+
+    // @brief Decrease the object's reference count, freeing any resources once
+    // the reference count reaches zero.
+    virtual void Release() = 0;
+};
+
+// @brief Interface for a native callback.
+class INativeCallback : public IRefcountedObject
+{
+  public:
+    // @brief Return the SOURCEPAWN_API_VERSION this was compiled against.
+    virtual int GetApiVersion() const { return SOURCEPAWN_API_VERSION; }
+
+    // @brief Called when a plugin invokes this native. The signature is the same
+    // as a normal native callback.
+    //
+    // @param ctx       Plugin context.
+    // @param params    Parameter vector.
+    // @return          Return value (ignored if an error is thrown).
+    virtual cell_t Invoke(IPluginContext* ctx, const cell_t* params) = 0;
+};
+
 /**
-   * @brief Represents what a function needs to implement in order to be callable.
-   */
+ * @brief Represents what a function needs to implement in order to be callable.
+ */
 class ICallable
 {
   public:
@@ -107,10 +152,10 @@ class ICallable
     virtual int PushFloatByRef(float* number, int flags = SM_PARAM_COPYBACK) = 0;
 
     /**
-     * @brief Pushes an array of cells onto the current call. 
+     * @brief Pushes an array of cells onto the current call.
      *
      * On Execute, the pointer passed will be modified if non-NULL and copy-back
-     * is enabled.  
+     * is enabled.
      *
      * By reference parameters are cached and thus are not read until execution.
      * This means you cannot push a pointer, change it, and push it again and expect
@@ -133,12 +178,12 @@ class ICallable
 
     /**
      * @brief Pushes a string or string buffer.
-     * 
+     *
      * NOTE: On Execute, the pointer passed will be modified if copy-back is enabled.
      *
      * @param buffer  Pointer to string buffer.
      * @param length  Length of buffer.
-     * @param sz_flags  String flags.  In copy mode, the string will be copied 
+     * @param sz_flags  String flags.  In copy mode, the string will be copied
      *          according to the handling (ascii, utf-8, binary, etc).
      * @param cp_flags  Copy-back flags.
      * @return      Error code, if any.
@@ -162,7 +207,7 @@ class IPluginFunction : public ICallable
 {
   public:
     /**
-     * @brief Executes the function, resets the pushed parameter list, and 
+     * @brief Executes the function, resets the pushed parameter list, and
      * performs any copybacks.
      *
      * The exception state is reset upon entering and leaving this
@@ -201,7 +246,7 @@ class IPluginFunction : public ICallable
 
     /**
      * @brief Returns the function ID of this function.
-     * 
+     *
      * Note: This was added in API version 4.
      *
      * @return        Function id.
@@ -237,7 +282,7 @@ class IPluginFunction : public ICallable
     virtual IPluginRuntime* GetParentRuntime() = 0;
 
     /**
-     * @brief Executes the function, resets the pushed parameter list, and 
+     * @brief Executes the function, resets the pushed parameter list, and
      * performs any copybacks.
      *
      * Unlike Execute(), this does not reset the exception state. It is
@@ -252,8 +297,8 @@ class IPluginFunction : public ICallable
 
     /**
      * @brief Returns a name to identify this function for debugging purposes.
-	    *
-	    * @return       String name.
+     *
+     * @return       String name.
      */
     virtual const char* DebugName() = 0;
 };
@@ -266,7 +311,7 @@ class IPluginDebugInfo
   public:
     /**
      * @brief Given a code pointer, finds the file it is associated with.
-     * 
+     *
      * @param addr    Code address offset.
      * @param filename  Pointer to store filename pointer in.
      */
@@ -361,7 +406,7 @@ class IPluginRuntime
 
     /**
      * @brief Gets the number of natives.
-     * 
+     *
      * @return        Filled with the number of natives.
      */
     virtual uint32_t GetNativesNum() = 0;
@@ -376,7 +421,7 @@ class IPluginRuntime
 
     /**
      * @brief Gets public function info by index.
-     * 
+     *
      * @param index      Public function index number.
      * @param publicptr    Optionally filled with pointer to public structure.
      */
@@ -391,7 +436,7 @@ class IPluginRuntime
 
     /**
      * @brief Gets public variable info by index.
-     * 
+     *
      * @param index      Public variable index number.
      * @param pubvar    Optionally filled with pointer to pubvar structure.
      */
@@ -407,7 +452,7 @@ class IPluginRuntime
 
     /**
      * @brief Gets the addresses of a public variable.
-     * 
+     *
      * @param index      Index of public variable.
      * @param local_addr    Address to store local address in.
      * @param phys_addr    Address to store physically relocated in.
@@ -438,7 +483,7 @@ class IPluginRuntime
     virtual IPluginFunction* GetFunctionById(funcid_t func_id) = 0;
 
     /**
-     * @brief Returns the default context.  The default context 
+     * @brief Returns the default context.  The default context
      * should not be destroyed.
      *
      * @return          Default context pointer.
@@ -508,7 +553,7 @@ class IPluginRuntime
      * @brief Returns the native at the given index.
      *
      * @param index     Native index.
-     * @return      Native pointer, or NULL on failure.
+     * @return          Native pointer, or NULL on failure.
      */
     virtual const sp_native_t* GetNative(uint32_t index) = 0;
 
@@ -516,6 +561,43 @@ class IPluginRuntime
      * @brief Return the file or location this plugin was loaded from.
      */
     virtual const char* GetFilename() = 0;
+
+    /**
+     * @brief Update the native binding at the given index.
+     *
+     * The given object will be AddRef'd immediately, and Released on failure.
+     * Thus, the caller can pass a newborn object with refcount == 0.
+     *
+     * @param native    Native callback object.
+     * @param flags     Native flags.
+     * @param user      User data pointer.
+     */
+    virtual int UpdateNativeBindingObject(uint32_t index, INativeCallback* native, uint32_t flags,
+                                          void* data) = 0;
+
+    /**
+     * @brief Perform a full validation. Normally validation is lazy to improve
+     * load-time performance. This validates all methods immediately.
+     */
+    virtual bool PerformFullValidation() = 0;
+
+    /**
+     * @brief Returns whether the plugin was compiled with direct array support.
+     *
+     * Direct arrays were introduced in SourcePawn 1.11. Any plugin with this
+     * feature will use absolute addressing for indirection vectors. Eg, for an
+     * array of array of cells (int x[][]), you can extract x[3][5] by doing:
+     *
+     *     cell_t addr_of_x = ...;
+     *     cell_t* phys_x;
+     *     LocalToPhysAddr(addr_of_x, &phys_x);
+     *     LocalToPhysAddr(phys_x[3], &phys_x);
+     *     cell_t value = phys_x[5];
+     *
+     * This code does not work on plugins compiled prior to 1.11, because arrays
+     * had relative indirection vectors.
+     */
+    virtual bool UsesDirectArrays() = 0;
 };
 
 /**
@@ -612,7 +694,7 @@ class IPluginContext
     /** Virtual destructor */
     virtual ~IPluginContext(){};
 
-    /** 
+    /**
      * @brief Deprecated, does nothing.
      *
      * @return        NULL.
@@ -653,7 +735,7 @@ class IPluginContext
     /**
      * @brief Allocates memory on the secondary stack of a plugin.
      * Note that although called a heap, it is in fact a stack.
-     * 
+     *
      * @param cells      Number of cells to allocate.
      * @param local_addr  Will be filled with data offset to heap.
      * @param phys_addr    Physical address to heap memory.
@@ -662,7 +744,7 @@ class IPluginContext
 
     /**
      * @brief Pops a heap address off the heap stack.  Use this to free memory allocated with
-     *  SP_HeapAlloc().  
+     *  SP_HeapAlloc().
      * Note that in SourcePawn, the heap is in fact a bottom-up stack.  Deallocations
      *  with this native should be performed in precisely the REVERSE order.
      *
@@ -672,11 +754,11 @@ class IPluginContext
 
     /**
      * @brief Releases a heap address using a different method than SP_HeapPop().
-     * This allows you to release in any order.  However, if you allocate N 
-     *  objects, release only some of them, then begin allocating again, 
-     *  you cannot go back and starting freeing the originals.  
+     * This allows you to release in any order.  However, if you allocate N
+     *  objects, release only some of them, then begin allocating again,
+     *  you cannot go back and starting freeing the originals.
      * In other words, for each chain of allocations, if you start deallocating,
-     *  then allocating more in a chain, you must only deallocate from the current 
+     *  then allocating more in a chain, you must only deallocate from the current
      *  allocation chain.  This is basically HeapPop() except on a larger scale.
      *
      * @param local_addr  Local address to free.
@@ -702,7 +784,7 @@ class IPluginContext
 
     /**
      * @brief Deprecated, use IPluginRuntime instead.
-     * 
+     *
      * @return        Filled with the number of natives.
      */
     virtual uint32_t GetNativesNum() = 0;
@@ -717,7 +799,7 @@ class IPluginContext
 
     /**
      * @brief Deprecated, use IPluginRuntime instead.
-     * 
+     *
      * @param index      Public function index number.
      * @param publicptr    Optionally filled with pointer to public structure.
      */
@@ -732,7 +814,7 @@ class IPluginContext
 
     /**
      * @brief Deprecated, use IPluginRuntime instead.
-     * 
+     *
      * @param index      Public variable index number.
      * @param pubvar    Optionally filled with pointer to pubvar structure.
      */
@@ -748,7 +830,7 @@ class IPluginContext
 
     /**
      * @brief Deprecated, use IPluginRuntime instead.
-     * 
+     *
      * @param index      Index of public variable.
      * @param local_addr  Address to store local address in.
      * @param phys_addr    Address to store physically relocated in.
@@ -807,7 +889,7 @@ class IPluginContext
      */
     virtual int PushCell(cell_t value) = 0;
 
-    /** 
+    /**
      * @brief Deprecated, does nothing.
      *
      * @param local_addr  Unused.
@@ -835,9 +917,9 @@ class IPluginContext
      */
     virtual int PushCellsFromArray(cell_t array[], unsigned int numcells) = 0;
 
-    /** 
+    /**
      * @brief Deprecated, does nothing.
-     * 
+     *
      * @param natives    Deprecated; do not use.
      * @param num      Deprecated; do not use.
      * @param overwrite    Deprecated; do not use.
@@ -908,7 +990,7 @@ class IPluginContext
 
     /**
      * @brief Returns the identity token for this context.
-     * 
+     *
      * Note: This is a compatibility shim and is the same as GetKey(1).
      *
      * @return      Identity token.
@@ -968,22 +1050,22 @@ class IPluginContext
                          cell_t* result) = 0;
 
     /**
-     * @brief Returns whether a context is in an error state.  
+     * @brief Returns whether a context is in an error state.
      *
      * This function is deprecated. Use DetectExceptions instead.
-     * 
-     * This should only be used inside natives to determine whether 
+     *
+     * This should only be used inside natives to determine whether
      * a prior call failed. The return value should only be compared
      * against SP_ERROR_NONE.
      */
     virtual int GetLastNativeError() = 0;
 
     /**
-     * @brief Returns the local parameter stack, starting from the 
+     * @brief Returns the local parameter stack, starting from the
      * cell that contains the number of parameters passed.
      *
-     * Local parameters are the parameters passed to the function 
-     * from which a native was called (and thus this can only be 
+     * Local parameters are the parameters passed to the function
+     * from which a native was called (and thus this can only be
      * called inside a native).
      *
      * @return        Parameter stack.
@@ -1065,8 +1147,8 @@ class IPluginContext
     virtual void ReportErrorNumber(int error) = 0;
 
     /**
-     * @brief Report a error caused by a plugin, specifying a function
-     * as the cause.  
+     * @brief Report an error caused by a plugin, specifying a function
+     * as the cause.
      */
     virtual cell_t BlamePluginError(IPluginFunction* pf, const char* msg, ...) = 0;
 
@@ -1074,16 +1156,73 @@ class IPluginContext
      * @brief Returns an IFrameIterator for the current call stack. Must
      * be freed by DestroyFrameIterator()
      *
-     * Note: It is illegal to re-enter the VM while a frame iterator is 
-     * active. The iterator must be processed and destroyed before continuing 
+     * Note: It is illegal to re-enter the VM while a frame iterator is
+     * active. The iterator must be processed and destroyed before continuing
      * to run SourcePawn plugins.
      */
     virtual IFrameIterator* CreateFrameIterator() = 0;
 
     /**
-     * @brief Frees an IFrameIterator object. Paired with CreateFrameIterator() 
+     * @brief Frees an IFrameIterator object. Paired with CreateFrameIterator()
      */
     virtual void DestroyFrameIterator(IFrameIterator* it) = 0;
+
+    /**
+     * @brief Allocate a 2D array on the heap.
+     *
+     * Calls to HeapAlloc2dArray should be made within a heap scope (see
+     * EnterHeapScope and LeaveHeapScope, or AutoEnterHeapScope).
+     *
+     * If |init| is not specified, the resulting array will be zeroed.
+     *
+     * If an error occurs, it is automatically reported.
+     *
+     * @param length        Number of elements in the array.
+     * @param stride        Size (in cells) of each element in the array.
+     * @param local_addr    Out address of the resulting array.
+     * @param init          If non-null, array to copy. The length and stride
+     *                      must be the same.
+     */
+    virtual bool HeapAlloc2dArray(unsigned int length, unsigned int stride, cell_t* local_addr,
+                                  const cell_t* init) = 0;
+
+    /**
+     * @brief Save the current position of the heap so it can be restored later.
+     *
+     * This must be paired with a call to LeaveHeapScope.
+     */
+    virtual void EnterHeapScope() = 0;
+
+    /**
+     * @brief Free any heap allocations made since the last call to
+     * EnterHeapScope.
+     */
+    virtual void LeaveHeapScope() = 0;
+};
+
+class AutoEnterHeapScope
+{
+  public:
+    explicit AutoEnterHeapScope(IPluginContext* cx)
+      : cx_(cx)
+    {
+        cx->EnterHeapScope();
+    }
+    AutoEnterHeapScope(AutoEnterHeapScope&& other)
+      : cx_(other.cx_)
+    {
+        other.cx_ = nullptr;
+    }
+    ~AutoEnterHeapScope() {
+        if (cx_)
+            cx_->LeaveHeapScope();
+    }
+
+    AutoEnterHeapScope(const AutoEnterHeapScope& other) = delete;
+    void operator =(const AutoEnterHeapScope& other) = delete;
+    void operator =(AutoEnterHeapScope&& other) = delete;
+  private:
+    IPluginContext* cx_;
 };
 
 /**
@@ -1142,7 +1281,7 @@ class IDebugListener
   public:
     /**
      * @brief No longer invoked.
-     * 
+     *
      * @param ctx    Unused.
      * @param error    Unused.
      */
@@ -1280,7 +1419,7 @@ class ISourcePawnEngine
 
     /**
      * @brief Allocates large blocks of temporary memory.
-     * 
+     *
      * @param size    Size of memory to allocate.
      * @return      Pointer to memory, NULL if allocation failed.
      */
@@ -1375,7 +1514,7 @@ class ISourcePawnEngine
 
 class ExceptionHandler;
 
-/** 
+/**
    * @brief Outlines the interface a Virtual Machine (JIT) must expose
    */
 class ISourcePawnEngine2
@@ -1410,9 +1549,9 @@ class ISourcePawnEngine2
     /**
      * @brief Loads a plugin from disk.
      *
-     * If a compilation object is supplied, it is destroyed upon 
+     * If a compilation object is supplied, it is destroyed upon
      * the function's return.
-     * 
+     *
      * @param co    Must be NULL.
      * @param file    Path to the file to compile.
      * @param err    Error code (filled on failure); required.
@@ -1421,20 +1560,16 @@ class ISourcePawnEngine2
     virtual IPluginRuntime* LoadPlugin(ICompilation* co, const char* file, int* err) = 0;
 
     /**
-     * @brief Creates a fake native and binds it to a general callback function.
+     * @brief Deprecated, do not use.
      *
-     * @param callback  Callback function to bind the native to.
-     * @param pData    Private data to pass to the callback when the native is invoked.
-     * @return      A new fake native function as a wrapper around the callback.
+     * @return          NULL.
      */
-    virtual SPVM_NATIVE_FUNC CreateFakeNative(SPVM_FAKENATIVE_FUNC callback, void* pData) = 0;
+    virtual SPVM_NATIVE_FUNC CreateFakeNative(SPVM_FAKENATIVE_FUNC, void*) = 0;
 
     /**
-     * @brief Destroys a fake native function wrapper.  
-     *
-     * @param func    Pointer to the fake native created by CreateFakeNative.
+     * @brief Deprecated, do not use.
      */
-    virtual void DestroyFakeNative(SPVM_NATIVE_FUNC func) = 0;
+    virtual void DestroyFakeNative(SPVM_NATIVE_FUNC) = 0;
 
     /**
      * @brief Sets the debug listener.
@@ -1543,6 +1678,22 @@ class ISourcePawnEngine2
      * @brief Returns the environment.
      */
     virtual ISourcePawnEnvironment* Environment() = 0;
+
+    /**
+     * @brief Loads a plugin from memory.
+     *
+     * @param file    Path for display purposes.
+     * @param addr    Plugin structure.
+     * @param size    Plugin structure size.
+     * @param dtor    If non-null, a destructor indicating that ownership of |addr|
+     *                is being transferred. The destructor is invoked even on failure.
+     * @param errpr    Buffer to store an error message (optional).
+     * @param maxlength  Maximum length of the error buffer.
+     * @return    New runtime pointer, or NULL on failure.
+     */
+    virtual IPluginRuntime* LoadBinaryFromMemory(const char* file, uint8_t* addr, size_t size,
+                                                 void (*dtor)(uint8_t*), char* error,
+                                                 size_t maxlength) = 0;
 };
 
 // @brief This class is the v3 API for SourcePawn. It provides access to
@@ -1550,6 +1701,8 @@ class ISourcePawnEngine2
 class ISourcePawnEnvironment
 {
   public:
+    static ISourcePawnEnvironment* New();
+
     // The Environment must be freed with the delete keyword. This
     // automatically calls Shutdown().
     virtual ~ISourcePawnEnvironment() {}
@@ -1588,6 +1741,10 @@ class ISourcePawnEnvironment
     // @brief Enables the line debugger callbacks. This must be called
     // before any plugins are loaded.
     virtual bool EnableDebugBreak() = 0;
+
+    // @brief See JIT_DEBUG_* flags.
+    // Must be set before any plugin code is executed.
+    virtual void SetDebugMetadataFlags(int flags) = 0;
 };
 
 // @brief This class is the entry-point to using SourcePawn from a DLL.

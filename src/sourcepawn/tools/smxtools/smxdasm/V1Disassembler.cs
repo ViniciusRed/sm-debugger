@@ -66,6 +66,7 @@ namespace smxdasm
             Prep(V1Opcode.DEC_I);
             Prep(V1Opcode.DEC_PRI);
             Prep(V1Opcode.DEC_S, V1Param.Stack);
+            Prep(V1Opcode.ENDPROC);
             Prep(V1Opcode.EQ);
             Prep(V1Opcode.EQ_C_ALT, V1Param.Constant);
             Prep(V1Opcode.EQ_C_PRI, V1Param.Constant);
@@ -93,10 +94,10 @@ namespace smxdasm
             Prep(V1Opcode.JZER, V1Param.Jump);
             Prep(V1Opcode.LIDX);
             Prep(V1Opcode.LIDX_B, V1Param.Constant);
-            Prep(V1Opcode.LOAD_ALT, V1Param.Constant);
-            Prep(V1Opcode.LOAD_BOTH, V1Param.Constant, V1Param.Constant);
+            Prep(V1Opcode.LOAD_ALT, V1Param.Address);
+            Prep(V1Opcode.LOAD_BOTH, V1Param.Address, V1Param.Address);
             Prep(V1Opcode.LOAD_I);
-            Prep(V1Opcode.LOAD_PRI, V1Param.Constant);
+            Prep(V1Opcode.LOAD_PRI, V1Param.Address);
             Prep(V1Opcode.LOAD_S_ALT, V1Param.Stack);
             Prep(V1Opcode.LOAD_S_BOTH, V1Param.Stack, V1Param.Stack);
             Prep(V1Opcode.LOAD_S_PRI, V1Param.Stack);
@@ -155,9 +156,9 @@ namespace smxdasm
             Prep(V1Opcode.SREF_S_PRI, V1Param.Stack);
             Prep(V1Opcode.SSHR);
             Prep(V1Opcode.STACK, V1Param.Constant);
-            Prep(V1Opcode.STOR_ALT, V1Param.Constant);
+            Prep(V1Opcode.STOR_ALT, V1Param.Address);
             Prep(V1Opcode.STOR_I);
-            Prep(V1Opcode.STOR_PRI, V1Param.Constant);
+            Prep(V1Opcode.STOR_PRI, V1Param.Address);
             Prep(V1Opcode.STOR_S_ALT, V1Param.Stack);
             Prep(V1Opcode.STOR_S_PRI, V1Param.Stack);
             Prep(V1Opcode.STRADJUST_PRI);
@@ -178,6 +179,12 @@ namespace smxdasm
             Prep(V1Opcode.ZERO_PRI);
             Prep(V1Opcode.ZERO_S, V1Param.Stack);
             Prep(V1Opcode.REBASE, V1Param.Address, V1Param.Constant, V1Param.Constant);
+            Prep(V1Opcode.INITARRAY_PRI, V1Param.Address, V1Param.Constant, V1Param.Constant,
+                 V1Param.Constant, V1Param.Constant);
+            Prep(V1Opcode.INITARRAY_ALT, V1Param.Address, V1Param.Constant, V1Param.Constant,
+                 V1Param.Constant, V1Param.Constant);
+            Prep(V1Opcode.HEAP_SAVE);
+            Prep(V1Opcode.HEAP_RESTORE);
         }
 
         private SmxFile file_;
@@ -216,14 +223,21 @@ namespace smxdasm
 
         private V1Instruction[] disassemble()
         {
+            var start = new V1Instruction();
+            start.Address = cursor_;
+            start.Info = opcode_list_[(int)V1Opcode.PROC];
+            start.Params = new int[0];
+
             if (readNextOp() != V1Opcode.PROC)
                 throw new Exception("Function does not start with PROC");
             var insns = new List<V1Instruction>();
+            insns.Add(start);
+
             while (cursor_ < cursor_limit_)
             {
                 int address = cursor_;
                 int op = readNext();
-                if (op == (int)V1Opcode.PROC || op == (int)V1Opcode.ENDPROC)
+                if (op == (int)V1Opcode.PROC)
                     break;
 
                 var insn = new V1Instruction();
@@ -249,6 +263,9 @@ namespace smxdasm
                 insn.Params = new int[insn.Info.Params.Length];
                 for (var i = 0; i < insn.Info.Params.Length; i++)
                     insn.Params[i] = readNext();
+
+                if (op == (int)V1Opcode.ENDPROC)
+                    break;
 
                 // Catch calls to unknown functions so they can be disassembled easily too.
                 if (op == (int)V1Opcode.CALL)

@@ -1,4 +1,4 @@
-// vim: set ts=8 sts=2 sw=2 tw=99 et:
+// vim: set ts=8 sts=4 sw=4 tw=99 et:
 //
 //  Copyright (c) ITB CompuPhase, 1997-2006
 //
@@ -19,6 +19,33 @@
 //  3.  This notice may not be removed or altered from any source distribution.
 #pragma once
 
-struct memfile_t;
+#include <vector>
 
-void assemble(const char* outname, memfile_t* fin);
+#include "code-generator.h"
+#include "compile-context.h"
+#include "libsmx/data-pool.h"
+#include "libsmx/smx-builder.h"
+#include "libsmx/smx-encoding.h"
+#include "sc.h"
+#include "shared/byte-buffer.h"
+#include "shared/string-pool.h"
+
+bool assemble(CompileContext& cc, CodeGenerator& cg, const char* outname,
+              int compression_level);
+
+class Assembler
+{
+  public:
+    explicit Assembler(CompileContext& cc, CodeGenerator& cg);
+
+    void Assemble(sp::SmxByteBuffer* buffer);
+
+  private:
+    void InitOpcodeLookup();
+
+    int FindOpcode(const char* instr, size_t maxlen);
+
+  private:
+    CompileContext& cc_;
+    CodeGenerator& cg_;
+};

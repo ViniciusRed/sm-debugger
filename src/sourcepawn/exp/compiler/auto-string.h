@@ -19,9 +19,11 @@
 #ifndef _include_auto_string_h_
 #define _include_auto_string_h_
 
-#include <string.h>
 #include <stdlib.h>
-#include <amtl/am-algorithm.h>
+#include <string.h>
+
+#include <algorithm>
+
 #include <amtl/am-string.h>
 
 namespace sp {
@@ -43,9 +45,9 @@ class AutoString
     {
       assign(ptr);
     }
-    AutoString(const AString& str)
+    AutoString(const std::string& str)
     {
-      assign(str.chars(), str.length());
+      assign(str.c_str(), str.size());
     }
     AutoString(const char* ptr, size_t len)
     {
@@ -79,8 +81,8 @@ class AutoString
       return *this;
     }
     AutoString& operator =(AutoString&& other) {
-      Swap(other.ptr_, ptr_);
-      Swap(other.length_, length_);
+      std::swap(other.ptr_, ptr_);
+      std::swap(other.length_, length_);
       return *this;
     }
 

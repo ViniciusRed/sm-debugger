@@ -15,6 +15,12 @@
 // You should have received a copy of the GNU General Public License
 // along with SourcePawn.  If not, see <http://www.gnu.org/licenses/>.
 //
+#include <fenv.h>
+#include <math.h>
+#include <stdlib.h>
+
+#include <utility>
+
 #include "interpreter.h"
 #include "debugging.h"
 #include "environment.h"
@@ -23,11 +29,7 @@
 #include "pcode-reader.h"
 #include "runtime-helpers.h"
 #include "watchdog_timer.h"
-#include <amtl/am-algorithm.h>
 #include <amtl/am-float.h>
-#include <fenv.h>
-#include <math.h>
-#include <stdlib.h>
 
 namespace sp {
 
@@ -58,7 +60,7 @@ Interpreter::run()
 {
   assert(reader_.peekOpcode() == OP_PROC);
 
-  InterpInvokeFrame ivk(cx_, method_, reader_.cip());
+  InterpInvokeFrame ivk(cx_, method_, reader_.insn_begin());
   ke::SaveAndSet<InterpInvokeFrame*> enterIvk(&ivk_, &ivk);
 
   reader_.begin();
@@ -88,7 +90,10 @@ Interpreter::invokeNative(uint32_t native_index)
 
     const cell_t* params = reinterpret_cast<const cell_t*>(cx_->memory() + cx_->sp());
 
-    regs_.pri() = native->legacy_fn(cx_, params);
+    if (native->legacy_fn)
+      regs_.pri() = native->legacy_fn(cx_, params);
+    else
+      regs_.pri() = native->callback->Invoke(cx_, params);
   } else {
     cx_->ReportErrorNumber(SP_ERROR_INVALID_NATIVE);
   }
@@ -150,10 +155,12 @@ Interpreter::visitCALL(cell_t offset)
     cx_->ReportErrorNumber(SP_ERROR_INVALID_ADDRESS);
     return false;
   }
-  int err = target->Validate();
-  if (err != SP_ERROR_NONE) {
-    cx_->ReportErrorNumber(err);
-    return false;
+  {
+    auto graph = target->Validate();
+    if (!graph) {
+      cx_->ReportErrorNumber(target->validationError());
+      return false;
+    }
   }
 
   // We don't interleave between the interpreter and JIT (yet).
@@ -770,7 +777,7 @@ Interpreter::visitMOVE(PawnReg reg)
 bool
 Interpreter::visitXCHG()
 {
-  ke::Swap(regs_.pri(), regs_.alt());
+  std::swap(regs_.pri(), regs_.alt());
   return true;
 }
 
@@ -1054,14 +1061,22 @@ Interpreter::visitHALT(cell_t value)
 }
 
 bool
-Interpreter::visitREBASE(cell_t addr, cell_t iv_size, cell_t data_size)
+Interpreter::visitHEAP_SAVE()
 {
-  int err = cx_->rebaseArray(regs_.pri(), addr, iv_size, data_size);
-  if (err != SP_ERROR_NONE) {
-    cx_->ReportErrorNumber(err);
-    return false;
-  }
-  return true;
+  return cx_->enterHeapScope();
+}
+
+bool
+Interpreter::visitHEAP_RESTORE()
+{
+  return cx_->leaveHeapScope();
+}
+
+bool
+Interpreter::visitINITARRAY(PawnReg reg, cell_t addr, cell_t iv_size, cell_t data_copy_size,
+                            cell_t data_fill_size, cell_t fill_value)
+{
+  return cx_->initArray(regs_[reg], addr, iv_size, data_copy_size, data_fill_size, fill_value);
 }
 
 } // namespace sp

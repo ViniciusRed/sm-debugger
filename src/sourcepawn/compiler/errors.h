@@ -27,11 +27,19 @@
 
 #include <stdarg.h>
 
+#include <unordered_set>
+
 #include <amtl/am-string.h>
 #include "lexer.h"
 #include "sc.h"
 
-enum class ErrorType { Suppressed, Warning, Error, Fatal };
+class ParseNode;
+
+enum class ErrorType {
+    Suppressed,
+    Warning,
+    Error
+};
 
 struct ErrorReport {
     static ErrorReport infer_va(int number, va_list ap);
@@ -40,31 +48,12 @@ struct ErrorReport {
     int number;
     int fileno;
     int lineno;
-    const char* filename;
-    ke::AString message;
+    std::string filename;
+    std::string message;
     ErrorType type;
 };
 
-enum FatalError {
-    FIRST_FATAL_ERROR = 183,
-
-    FATAL_ERROR_READ = FIRST_FATAL_ERROR,
-    FATAL_ERROR_WRITE,
-    FATAL_ERROR_ALLOC_OVERFLOW,
-    FATAL_ERROR_OOM,
-    FATAL_ERROR_INVALID_INSN,
-    FATAL_ERROR_INT_OVERFLOW,
-    FATAL_ERROR_SCRIPT_OVERFLOW,
-    FATAL_ERROR_OVERWHELMED_BY_BAD,
-    FATAL_ERROR_NO_CODEPAGE,
-    FATAL_ERROR_INVALID_PATH,
-    FATAL_ERROR_ASSERTION_FAILED,
-    FATAL_ERROR_USER_ERROR,
-    FATAL_ERROR_NO_GENERATED_CODE,
-    FATAL_ERROR_FUNCENUM,
-
-    FATAL_ERRORS_TOTAL
-};
+class ReportManager;
 
 class AutoErrorPos final
 {
@@ -77,6 +66,7 @@ class AutoErrorPos final
     }
 
   private:
+    ReportManager* reports_;
     token_pos_t pos_;
     AutoErrorPos* prev_;
 };
@@ -85,9 +75,125 @@ int error(int number, ...);
 int error(symbol* sym, int number, ...);
 int error(const token_pos_t& where, int number, ...);
 int error_va(const token_pos_t& where, int number, va_list ap);
-void errorset(int code, int line);
-void report_error(ErrorReport* report);
+
+class MessageBuilder
+{
+  public:
+    explicit MessageBuilder(int number);
+    MessageBuilder(symbol* sym, int number);
+    MessageBuilder(ParseNode* node, int number);
+    MessageBuilder(MessageBuilder&& other);
+
+    MessageBuilder(const MessageBuilder& other) = delete;
+
+    MessageBuilder(const token_pos_t& where, int number)
+      : where_(where),
+        number_(number)
+    {}
+    ~MessageBuilder();
+
+    MessageBuilder& operator <<(const char* arg) {
+        args_.emplace_back(arg);
+        return *this;
+    }
+    MessageBuilder& operator <<(const std::string& arg) {
+        args_.emplace_back(arg);
+        return *this;
+    }
+    MessageBuilder& operator <<(sp::Atom* atom) {
+        args_.emplace_back(atom ? atom->chars() : "<unknown>");
+        return *this;
+    }
+    MessageBuilder& operator <<(Type* type);
+
+    template <typename Integer,
+              std::enable_if_t<std::is_integral<Integer>::value, bool> = true>
+    MessageBuilder& operator <<(Integer n) {
+        args_.emplace_back(std::to_string(n));
+        return *this;
+    }
+
+    void operator =(const MessageBuilder& other) = delete;
+    MessageBuilder& operator =(MessageBuilder&& other);
+
+  private:
+    token_pos_t where_;
+    int number_;
+    std::vector<std::string> args_;
+    bool disabled_ = false;
+};
+
+static inline MessageBuilder report(const token_pos_t& where, int number) {
+    return MessageBuilder(where, number);
+}
+static inline MessageBuilder report(int number) {
+    return MessageBuilder(number);
+}
+static inline MessageBuilder report(symbol* sym, int number) {
+    return MessageBuilder(sym, number);
+}
+static inline MessageBuilder report(ParseNode* node, int number) {
+    return MessageBuilder(node, number);
+}
+
+#ifdef NDEBUG
+static inline void break_on_error(int) {}
+#else
+void break_on_error(int number);
+#endif
 
 int pc_enablewarning(int number, int enable);
+
+class ReportManager
+{
+  public:
+    ReportManager(CompileContext& cc);
+
+    void ReportError(ErrorReport&& report);
+    void ResetErrorFlag() { errflag_ = false; }
+    void DumpErrorReport(bool clear);
+    bool IsWarningDisabled(int number);
+
+    // 0=disable, 1=enable, 2=toggle
+    void EnableWarning(int number, int enable);
+
+    unsigned int total_errors() const { return total_errors_; }
+    unsigned int NumErrorMessages() const;
+    unsigned int NumWarnMessages() const;
+
+    void set_pos_override(AutoErrorPos* pos) { pos_override_ = pos; }
+    AutoErrorPos* pos_override() const { return pos_override_; }
+
+  private:
+    CompileContext& cc_;
+    bool errflag_ = false;
+    unsigned int errors_on_line_ = 0;
+    std::vector<ErrorReport> error_list_;
+    AutoErrorPos* pos_override_ = nullptr;
+    std::unordered_set<int> warn_disable_;
+    int lastline_ = 0;
+    short lastfile_ = 0;
+
+    // This is not necessarily equal to the number of reports, since we
+    // suppress generating a report if there are too many errors on one
+    // line.
+    unsigned int total_errors_ = 0;
+
+    // This is the actual # of reported errors.
+    size_t total_reported_errors_ = 0;
+};
+
+class AutoCountErrors
+{
+  public:
+    AutoCountErrors();
+
+    void Reset();
+    bool ok() const;
+
+  private:
+    ReportManager* reports_;
+    unsigned old_errors_;
+};
 
 #endif // am_sourcepawn_compiler_sc5_h

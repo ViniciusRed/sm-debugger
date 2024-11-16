@@ -16,9 +16,12 @@
  * You should have received a copy of the GNU General Public License along with
  * SourcePawn. If not, see http://www.gnu.org/licenses/.
  */
-#include <amtl/experimental/am-argparser.h>
 #include <stdio.h>
 #include <string.h>
+
+#include <utility>
+
+#include <amtl/experimental/am-argparser.h>
 #include "compile-context.h"
 #include "source-manager.h"
 #include "type-manager.h"
@@ -34,15 +37,15 @@ int main(int argc, char** argv)
   StringOption input_file(parser, "file", "Input file.");
   StringOption output_file(parser, "o", "output", Nothing(),
     "SMX output file.");
-  RepeatOption<AString> includes(parser, "-i", nullptr,
+  RepeatOption<std::string> includes(parser, "-i", nullptr,
     "Add a folder to the include path.");
 
   // :TODO: Turn these off by default once we're closer to release.
-  BoolOption show_ast(parser, nullptr, "show-ast", Some(true),
+  EnableOption show_ast(parser, nullptr, "show-ast", true,
     "Print the AST to stderr.");
-  BoolOption show_sema(parser, nullptr, "show-sema", Some(true),
+  EnableOption show_sema(parser, nullptr, "show-sema", true,
     "Print the semantic analysis tree to stderr.");
-  BoolOption pool_stats(parser, nullptr, "pool-stats", Some(true),
+  EnableOption pool_stats(parser, nullptr, "pool-stats", true,
     "Show pool memory usage after each phase.");
   ToggleOption parse_only(parser, nullptr, "parse-only", Some(false),
     "Skip name binding and type resolution.");
@@ -68,11 +71,11 @@ int main(int argc, char** argv)
     cc.options().ShowSema = show_sema.value();
     cc.options().ShowPoolStats = pool_stats.value();
     cc.options().OutputFile = output_file.maybeValue();
-    cc.options().SearchPaths = Move(includes.values());
+    cc.options().SearchPaths = std::move(includes.values());
     
     ReportingContext rc(cc, SourceLocation(), false);
 
-    const char* filename = input_file.value().chars();
+    const char* filename = input_file.value().c_str();
     RefPtr<SourceFile> file = source.open(rc, filename);
     if (!file) {
       fprintf(stderr, "cannot open file '%s'\n", filename);

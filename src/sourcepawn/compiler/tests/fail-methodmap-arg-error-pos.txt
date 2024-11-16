@@ -1,2 +1,0 @@
-(9) : error 035: argument type mismatch (argument 1)
-(10) : error 035: argument type mismatch (argument 1)

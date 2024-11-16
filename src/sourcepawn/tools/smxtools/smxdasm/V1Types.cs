@@ -8,6 +8,14 @@ namespace smxdasm
         Debug = 0x00000001,
     }
 
+    [Flags]
+    public enum CodeV1Features : uint
+    {
+        Deprecated0 = 1 << 0,
+        DirectArrays = 1 << 1,
+        HeapScopes = 1 << 2,
+    }
+
     // The ".code" section.
     public class CodeV1Header
     {
@@ -35,7 +43,7 @@ namespace smxdasm
         public int codeoffs;
 
         // Feature set.
-        public int features;
+        public CodeV1Features features;
 
         public static CodeV1Header From(BinaryReader rd)
         {
@@ -47,7 +55,7 @@ namespace smxdasm
             code.main = rd.ReadInt32();
             code.codeoffs = rd.ReadInt32();
             if (code.CodeVersion >= 13)
-              code.features = rd.ReadInt32();
+              code.features = (CodeV1Features)rd.ReadInt32();
             return code;
         }
     }
@@ -321,6 +329,7 @@ namespace smxdasm
     // The ".dbg.globals"  and ".dbg.locals" section.
     public class DebugVarEntry
     {
+        public uint index;
         public int address;
         public SymScope scope;
         public int name_offset;
@@ -328,9 +337,10 @@ namespace smxdasm
         public int code_end;
         public int type_id;
 
-        public static DebugVarEntry From(BinaryReader rd)
+        public static DebugVarEntry From(BinaryReader rd, uint index)
         {
             DebugVarEntry entry = new DebugVarEntry();
+            entry.index = index;
             entry.address = rd.ReadInt32();
             entry.scope = (SymScope)(rd.ReadByte() & 3);
             entry.name_offset = rd.ReadInt32();

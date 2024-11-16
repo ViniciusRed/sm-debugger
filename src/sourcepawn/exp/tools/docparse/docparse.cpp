@@ -16,13 +16,13 @@
 // You should have received a copy of the GNU General Public License along with
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
 #include "shared/string-pool.h"
-#include "compiler/reporting.h"
-#include "compiler/source-manager.h"
-#include "compiler/compile-context.h"
-#include "compiler/parser/preprocessor.h"
-#include "compiler/parser/parser.h"
-#include "compiler/parser/json-tools.h"
-#include "compiler/sema/name-resolver.h"
+#include "exp/compiler/reporting.h"
+#include "exp/compiler/source-manager.h"
+#include "exp/compiler/compile-context.h"
+#include "exp/compiler/parser/preprocessor.h"
+#include "exp/compiler/parser/parser.h"
+#include "exp/compiler/parser/json-tools.h"
+#include "exp/compiler/sema/name-resolver.h"
 #include <assert.h>
 #include <amtl/experimental/am-argparser.h>
 
@@ -65,7 +65,7 @@ class Comments : public CommentDelegate
 
   void HandleComment(CommentPos aWhere, const SourceRange &aRange)
   {
-    Vector<CommentRange> &where = (aWhere == CommentPos::Front)
+    std::vector<CommentRange> &where = (aWhere == CommentPos::Front)
                                   ? lead_comments_
                                   : tail_comments_;
 
@@ -81,7 +81,7 @@ class Comments : public CommentDelegate
       // Comments must be in order.
       assert(range.start.offset >= where.back().end.offset);
     }
-    where.append(range);
+    where.push_back(range);
   }
 
   static int cmp_ends_at_line(const void *aItem1, const void *aItem2) {
@@ -111,14 +111,14 @@ class Comments : public CommentDelegate
 
     void *found =
       bsearch(reinterpret_cast<void *>(ref.line - 1),
-              lead_comments_.buffer(),
-              lead_comments_.length(),
+              lead_comments_.data(),
+              lead_comments_.size(),
               sizeof(CommentRange),
               cmp_ends_at_line);
     if (!found) {
       found = bsearch(reinterpret_cast<void *>(ref.line),
-                      tail_comments_.buffer(),
-                      tail_comments_.length(),
+                      tail_comments_.data(),
+                      tail_comments_.size(),
                       sizeof(CommentRange),
                       cmp_starts_at_line);
       if (!found)
@@ -133,8 +133,8 @@ class Comments : public CommentDelegate
 
  private:
   CompileContext &cc_;
-  Vector<CommentRange> lead_comments_;
-  Vector<CommentRange> tail_comments_;
+  std::vector<CommentRange> lead_comments_;
+  std::vector<CommentRange> tail_comments_;
 };
 
 class Analyzer : public PartialAstVisitor
@@ -159,6 +159,7 @@ class Analyzer : public PartialAstVisitor
     atom_entries_ = cc_.add("entries");
     atom_constants_ = cc_.add("constants");
     atom_decl_ = cc_.add("decl");
+    atom_parent_ = cc_.add("parent");
   }
 
   JsonObject *analyze(ParseTree *tree) {
@@ -169,7 +170,7 @@ class Analyzer : public PartialAstVisitor
     typesets_ = new (pool_) JsonList();
     typedefs_ = new (pool_) JsonList();
 
-    for (size_t i = 0; i < tree->statements()->length(); i++) {
+    for (size_t i = 0; i < tree->statements()->size(); i++) {
       Statement *stmt = tree->statements()->at(i);
       stmt->accept(this);
     }
@@ -189,13 +190,17 @@ class Analyzer : public PartialAstVisitor
     obj->add(atom_name_, toJson(node->name()));
     startDoc(obj, "class", node->name(), node->loc());
 
+    if (node->parent())
+      obj->add(atom_parent_, new (pool_) JsonString(node->parent()->name()));
+
     SaveAndSet<JsonList *> new_props(&props_, new (pool_) JsonList());
     SaveAndSet<JsonList *> new_methods(&methods_, new (pool_) JsonList());
-    for (size_t i = 0; i < node->body()->length(); i++)
+    for (size_t i = 0; i < node->body()->size(); i++)
       node->body()->at(i)->accept(this);
 
     obj->add(atom_methods_, methods_);
     obj->add(atom_properties_, props_);
+
     methodmaps_->add(obj);
   }
 
@@ -205,6 +210,10 @@ class Analyzer : public PartialAstVisitor
     startDoc(obj, "method", node->name(), node->loc());
 
     FunctionNode *fun = node->method();
+    if (fun->signature()->native())
+        obj->add(atom_kind_, toJson("native"));
+    else
+        obj->add(atom_kind_, toJson("stock"));
     obj->add(atom_returnType_, toJson(fun->signature()->returnType()));
     obj->add(atom_parameters_, toJson(fun->signature()->parameters()));
     methods_->add(obj);
@@ -226,7 +235,7 @@ class Analyzer : public PartialAstVisitor
     startDoc(obj, "typeset", decl->name(), decl->loc());
 
     JsonList *list = new (pool_) JsonList();
-    for (size_t i = 0; i < decl->types()->length(); i++) {
+    for (size_t i = 0; i < decl->types()->size(); i++) {
       const TypesetDecl::Entry &entry = decl->types()->at(i);
       JsonObject *te = new (pool_) JsonObject();
       te->add(atom_type_, toJson(entry.te));
@@ -254,7 +263,7 @@ class Analyzer : public PartialAstVisitor
 
   void visitEnumStatement(EnumStatement *node) override {
     if (!node->name()) {
-      for (size_t i = 0; i < node->entries()->length(); i++) {
+      for (size_t i = 0; i < node->entries()->size(); i++) {
         EnumConstant *cs = node->entries()->at(i);
 
         JsonObject *val = new (pool_) JsonObject();
@@ -271,7 +280,7 @@ class Analyzer : public PartialAstVisitor
     startDoc(obj, "enum", node->name(), node->loc());
 
     JsonList *list = new (pool_) JsonList();
-    for (size_t i = 0; i < node->entries()->length(); i++) {
+    for (size_t i = 0; i < node->entries()->size(); i++) {
       EnumConstant *cs = node->entries()->at(i);
 
       JsonObject *val = new (pool_) JsonObject();
@@ -320,10 +329,10 @@ class Analyzer : public PartialAstVisitor
   }
 
   JsonString *toJson(const TypeSpecifier *spec, Atom *name = nullptr) {
-    return toJson(BuildTypeName(spec, name, TypeDiagFlags::Names).chars());
+    return toJson(BuildTypeName(spec, name, TypeDiagFlags::Names).c_str());
   }
   JsonString *toJson(Type *type, Atom *name = nullptr) {
-    return toJson(BuildTypeName(type, name, TypeDiagFlags::Names).chars());
+    return toJson(BuildTypeName(type, name, TypeDiagFlags::Names).c_str());
   }
 
   JsonString *toJson(const TypeExpr &te, Atom *name = nullptr) {
@@ -353,12 +362,12 @@ class Analyzer : public PartialAstVisitor
     return toJson(BuildTypeName(
       decl->te(),
       named ? decl->name() : nullptr,
-      flags).chars());
+      flags).c_str());
   }
 
   JsonList *toJson(const ParameterList *params) {
     JsonList *list = new (pool_) JsonList();
-    for (size_t i = 0; i < params->length(); i++) {
+    for (size_t i = 0; i < params->size(); i++) {
       VarDecl *decl = params->at(i);
       JsonObject *obj = new (pool_) JsonObject();
 
@@ -405,6 +414,7 @@ class Analyzer : public PartialAstVisitor
   Atom *atom_entries_;
   Atom *atom_constants_;
   Atom *atom_decl_;
+  Atom *atom_parent_;
   JsonList *functions_;
   JsonList *methodmaps_;
   JsonList *enums_;
@@ -473,7 +483,7 @@ int main(int argc, char **argv)
 
     cc.SkipResolution();
 
-    const char* file = filename.value().chars();
+    const char* file = filename.value().c_str();
     JsonObject *obj = Run(cc, file);
     if (!obj) {
       reports.PrintMessages();

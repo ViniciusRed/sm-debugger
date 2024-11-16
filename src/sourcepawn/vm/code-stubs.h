@@ -32,19 +32,18 @@ class CodeStubs
  public:
   bool Initialize();
 
-  SPVM_NATIVE_FUNC CreateFakeNativeStub(SPVM_FAKENATIVE_FUNC callback, void* userData);
-
   InvokeStubFn InvokeStub() const {
     return (InvokeStubFn)invoke_stub_.address();
   }
   void* ReturnStub() const {
     return return_stub_;
   }
-  void* LegacyNativeStub();
 
  private:
   bool InitializeFeatureDetection();
+#if defined(SP_HAS_JIT)
   bool CompileInvokeStub();
+#endif
 
  private:
   Environment* env_;

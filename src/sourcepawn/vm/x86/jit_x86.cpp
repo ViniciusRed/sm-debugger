@@ -101,15 +101,17 @@ InvokeGenerateFullArray(PluginContext* cx, uint32_t argc, cell_t* argv, int auto
   return cx->generateFullArray(argc, argv, autozero);
 }
 
-// No exit frame - error code is returned directly.
 static int
-InvokeRebaseArray(PluginContext* cx,
-                  cell_t base_addr,
-                  cell_t dat_addr,
-                  cell_t iv_size,
-                  cell_t data_size)
+InvokeInitArray(PluginContext* cx,
+                cell_t base_addr,
+                cell_t dat_addr,
+                cell_t iv_size,
+                cell_t data_copy_size,
+                cell_t data_fill_size,
+                cell_t fill_value)
 {
-  return cx->rebaseArray(base_addr, dat_addr, iv_size, data_size);
+  return cx->initArray(base_addr, dat_addr, iv_size, data_copy_size, data_fill_size,
+                       fill_value) ? 1 : 0;
 }
 
 bool
@@ -1002,7 +1004,7 @@ Compiler::visitHEAP(cell_t amount)
 bool
 Compiler::visitJUMP(cell_t offset)
 {
-  assert(block_->successors().length() == 1);
+  assert(block_->successors().size() == 1);
 
   Block* successor = block_->successors()[0];
   if (isNextBlock(successor)) {
@@ -1015,7 +1017,7 @@ Compiler::visitJUMP(cell_t offset)
   Label* target = successor->label();
   if (isBackedge(successor)) {
     __ jmp32(target);
-    backward_jumps_.append(BackwardJump(masm.pc(), op_cip_));
+    backward_jumps_.push_back(BackwardJump(masm.pc(), op_cip_));
   } else {
     __ jmp(target);
   }
@@ -1046,7 +1048,7 @@ Compiler::visitJcmp(CompareOp op, cell_t offset)
       return false;
   }
 
-  assert(block_->successors().length() == 2);
+  assert(block_->successors().size() == 2);
   Block* fallthrough = block_->successors()[0];
   Block* target = block_->successors()[1];
 
@@ -1054,7 +1056,7 @@ Compiler::visitJcmp(CompareOp op, cell_t offset)
 
   if (isBackedge(target)) {
     __ j32(cc, target->label());
-    backward_jumps_.append(BackwardJump(masm.pc(), op_cip_));
+    backward_jumps_.push_back(BackwardJump(masm.pc(), op_cip_));
 
     if (!isNextBlock(fallthrough))
       __ jmp(fallthrough->label());
@@ -1113,23 +1115,54 @@ Compiler::visitTRACKER_POP_SETHEAP()
 }
 
 bool
-Compiler::visitREBASE(cell_t addr, cell_t iv_size, cell_t data_size)
+Compiler::visitINITARRAY(PawnReg reg, cell_t addr, cell_t iv_size, cell_t data_copy_size,
+                         cell_t data_fill_size, cell_t fill_value)
 {
-  // We need to sync |sp| first.
-  __ subl(stk, dat);
-  __ movl(Operand(spAddr()), stk);
-  __ addl(stk, dat);
+  if (!iv_size) {
+    // This is a flat array, we can inline something a little faster.
+    __ push(edi);
+    if (reg == PawnReg::Pri)
+      __ lea(edi, Operand(dat, pri, NoScale));
+    else
+      __ lea(edi, Operand(dat, alt, NoScale));
+    if (data_copy_size) {
+      __ push(esi);
+      __ lea(esi, Operand(dat, addr));
+      __ cld();
+      __ movl(ecx, data_copy_size);
+      __ rep_movsd();
+      __ pop(esi);
+    }
+    if (data_fill_size) {
+      __ movl(eax, fill_value);
+      __ movl(ecx, data_fill_size);
+      __ rep_stosd();
+    }
+    __ pop(edi);
+  } else {
+    // Slow (multi-d) array initialization.
+    // We need to sync |sp| first.
+    __ subl(stk, dat);
+    __ movl(Operand(spAddr()), stk);
+    __ addl(stk, dat);
 
-  __ subl(esp, 3 * sizeof(intptr_t));
-  __ push(data_size);
-  __ push(iv_size);
-  __ push(addr);
-  __ push(pri);
-  __ push(intptr_t(rt_->GetBaseContext()));
-  __ callWithABI(ExternalAddress((void*)InvokeRebaseArray));
-  __ addl(esp, 8 * sizeof(intptr_t));
-  __ testl(eax, eax);
-  jumpOnError(not_zero);
+    __ push(alt);
+    __ push(fill_value);
+    __ push(data_fill_size);
+    __ push(data_copy_size);
+    __ push(iv_size);
+    __ push(addr);
+    if (reg == PawnReg::Pri)
+      __ push(pri);
+    else
+      __ push(alt);
+    __ push(intptr_t(rt_->GetBaseContext()));
+    __ callWithABI(ExternalAddress((void*)InvokeInitArray));
+    __ addl(esp, 7 * sizeof(intptr_t));
+    __ pop(alt);
+    __ testl(eax, eax);
+    __ j(zero, &return_reported_error_);
+  }
   return true;
 }
 
@@ -1157,10 +1190,7 @@ bool
 Compiler::visitBOUNDS(uint32_t limit)
 {
   OutOfBoundsErrorPath* bounds = new OutOfBoundsErrorPath(op_cip_, limit);
-  if (!ool_paths_.append(bounds)) {
-    reportError(SP_ERROR_OUT_OF_MEMORY);
-    return false;
-  }
+  ool_paths_.push_back(bounds);
 
   __ cmpl(eax, limit);
   __ j(above, bounds->label());
@@ -1200,16 +1230,18 @@ Compiler::visitGENARRAY(uint32_t dims, bool autozero)
     __ cmpl(alt, stk);
     jumpOnError(not_below, SP_ERROR_HEAPLOW);
 
-    __ shll(tmp, 2);
-    __ subl(esp, 8);
-    __ push(tmp);
-    __ push(intptr_t(rt_->GetBaseContext()));
-    __ callWithABI(ExternalAddress((void*)InvokePushTracker));
-    __ movl(tmp, Operand(esp, 4));
-    __ addl(esp, 16);
-    __ shrl(tmp, 2);
-    __ testl(eax, eax);
-    jumpOnError(not_zero);
+    if (!rt_->UsesHeapScopes()) {
+      __ shll(tmp, 2);
+      __ subl(esp, 8);
+      __ push(tmp);
+      __ push(intptr_t(rt_->GetBaseContext()));
+      __ callWithABI(ExternalAddress((void*)InvokePushTracker));
+      __ movl(tmp, Operand(esp, 4));
+      __ addl(esp, 16);
+      __ shrl(tmp, 2);
+      __ testl(eax, eax);
+      jumpOnError(not_zero);
+    }
 
     if (autozero) {
       // Note - tmp is ecx and still intact.
@@ -1224,6 +1256,11 @@ Compiler::visitGENARRAY(uint32_t dims, bool autozero)
       __ pop(eax);
     }
   } else {
+    // We need to sync |sp| first.
+    __ subl(stk, dat);
+    __ movl(Operand(spAddr()), stk);
+    __ addl(stk, dat);
+
     __ push(pri);
     __ subl(esp, 12);
 
@@ -1272,10 +1309,7 @@ Compiler::visitCALL(cell_t offset)
     // Need to emit a delayed thunk.
     CallThunk* thunk = new CallThunk(offset);
     __ callWithABI(thunk->label());
-    if (!ool_paths_.append(thunk)) {
-      reportError(SP_ERROR_OUT_OF_MEMORY);
-      return false;
-    }
+    ool_paths_.push_back(thunk);
   } else {
     // Function is already emitted, we can do a direct call.
     __ callWithABI(ExternalAddress(method->jit()->GetEntryAddress()));
@@ -1340,6 +1374,13 @@ Compiler::visitSYSREQ_C(uint32_t native_index)
   return true;
 }
 
+static cell_t NativeInvokeThunk(NativeEntry* native, IPluginContext* ctx, const cell_t* params)
+{
+  if (native->legacy_fn)
+    return native->legacy_fn(ctx, params);
+  return native->callback->Invoke(ctx, params);
+} 
+
 void
 Compiler::emitLegacyNativeCall(uint32_t native_index, NativeEntry* native)
 {
@@ -1353,10 +1394,17 @@ Compiler::emitLegacyNativeCall(uint32_t native_index, NativeEntry* native)
   bool immutable = native->status == SP_NATIVE_BOUND &&
                    !(native->flags & (SP_NTVFLAG_EPHEMERAL|SP_NTVFLAG_OPTIONAL));
   if (!immutable) {
-    __ movl(edx, Operand(ExternalAddress(&native->legacy_fn)));
-    __ testl(edx, edx);
-    __ j(zero, &unbound_native_error_);
+    __ movl(edx, Operand(ExternalAddress(&native->status)));
+    __ cmpl(edx, SP_NATIVE_BOUND);
+    __ j(not_equal, &unbound_native_error_);
   }
+
+  bool fast_path = immutable && native->legacy_fn;
+
+  // If we're going to take the slow path, the stack has an extra word, so we
+  // need to align it here.
+  if (!fast_path)
+    __ subl(esp, 12);
 
   // Save the old heap pointer.
   __ push(Operand(hpAddr()));
@@ -1372,27 +1420,45 @@ Compiler::emitLegacyNativeCall(uint32_t native_index, NativeEntry* native)
   // Push the first parameter, the context.
   __ push(intptr_t(rt_->GetBaseContext()));
 
-  // Invoke the native.
-  if (immutable)
+  if (fast_path) {
+    // Fast invoke, skip right to the function call.
+    //
+    // Stack (16 bytes):
+    //   12: Saved EDX
+    //    8: Saved HP
+    //    4: Cells
+    //    0: Context
     __ callWithABI(ExternalAddress((void*)native->legacy_fn));
-  else
-    __ callWithABI(edx);
+  } else {
+    // Slower invoke, go through a wrapper so we don't have to make this super
+    // complicated handling all the different calling conventions.
+    //
+    // Stack (32 bytes):
+    //   28: Saved EDX
+    //   24: Alignment (3 words)
+    //   12: Saved HP
+    //    8: Cells
+    //    4: Context
+    //    0: Native
+    __ push(reinterpret_cast<intptr_t>(native));
+    __ callWithABI(ExternalAddress((void*)NativeInvokeThunk));
+  }
   __ bind(&return_address);
   // Map the return address to the cip that initiated this call.
   emitCipMapping(op_cip_);
 
   // Restore the heap pointer.
-  __ movl(edx, Operand(esp, 2 * sizeof(intptr_t)));
+  __ movl(edx, Operand(esp, (fast_path ? 2 : 3) * sizeof(intptr_t)));
   __ movl(Operand(hpAddr()), edx);
 
   // Restore ALT.
-  __ movl(edx, Operand(esp, 3 * sizeof(intptr_t)));
+  __ movl(edx, Operand(esp, (fast_path ? 3 : 7) * sizeof(intptr_t)));
 
   // Restore SP.
   __ addl(stk, dat);
 
   // Remove the inline frame, + our four arguments.
-  __ popInlineExitFrame(4);
+  __ popInlineExitFrame(fast_path ? 4 : 8);
 
   // Check for errors. Note we jump directly to the return stub since the
   // error has already been reported.
@@ -1406,7 +1472,7 @@ Compiler::visitSWITCH(cell_t defaultOffset,
                       const CaseTableEntry* cases,
                       size_t ncases)
 {
-  assert(block_->successors().length() == ncases + 1);
+  assert(block_->successors().size() == ncases + 1);
   Block* defaultCase = block_->successors()[0];
 
   // Degenerate - 0 cases.
@@ -1484,6 +1550,34 @@ Compiler::visitSWITCH(cell_t defaultOffset,
   return true;
 }
 
+bool
+Compiler::visitHEAP_SAVE()
+{
+  // Allocate one cell on the heap.
+  visitHEAP(sizeof(cell_t));
+  // Get the addres of the old heap scope in pri.
+  __ movl(pri, Operand(hpScopeAddr()));
+  // Store the old heap scope address into the new heap scope.
+  __ movl(Operand(dat, alt, NoScale), pri);
+  // Update the context's current heap scope.
+  __ movl(Operand(hpScopeAddr()), alt);
+  return true;
+}
+
+bool
+Compiler::visitHEAP_RESTORE()
+{
+  // Get the current heap scope address.
+  __ movl(ecx, Operand(hpScopeAddr()));
+  // Get the previous heap scope address.
+  __ movl(alt, Operand(dat, ecx, NoScale));
+  // Update the heap pointer.
+  __ movl(Operand(hpAddr()), ecx);
+  // Update the heap scope.
+  __ movl(Operand(hpScopeAddr()), alt);
+  return true;
+}
+
 void
 Compiler::emitFloatCmp(ConditionCode cc)
 {
@@ -1539,8 +1633,7 @@ Compiler::jumpOnError(ConditionCode cc, int err)
 {
   // Note: we accept 0 for err. In this case we expect the error to be in eax.
   ErrorPath* path = new ErrorPath(op_cip_, err);
-  if (!ool_paths_.append(path))
-    reportError(SP_ERROR_OUT_OF_MEMORY);
+  ool_paths_.push_back(path);
 
   __ j(cc, path->label());
 }

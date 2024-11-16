@@ -1,10 +1,12 @@
 # vim: set ts=2 sw=2 tw=99 et:
-import re
-import os, sys
 import argparse
-import subprocess
-import testutil
 import datetime
+import os
+import platform
+import re
+import subprocess
+import sys
+import testutil
 from testutil import manifest_get
 
 def main():
@@ -69,18 +71,12 @@ class TestPlan(object):
   def show_cli(self):
     return self.args.show_cli
 
-  arch_suffixes = [
-    '',
-    '.x64',
-  ]
   def match_arch(self, arch):
     if self.args.arch is None:
       return True
-    if self.args.arch == 'x86':
-      return arch == ''
     if self.args.arch == 'x64' or self.args.arch == 'x86_64':
-      return arch == '.x64'
-    return False
+      return arch == 'x86_64'
+    return self.args.arch == arch
 
   def find_executable(self, path):
     if os.path.exists(path):
@@ -93,37 +89,54 @@ class TestPlan(object):
       return None
     return path
 
+  def find_executables_in(self, path, name):
+    kPlatformNames = {
+        'Linux': 'linux',
+        'Darwin': 'mac',
+        'Windows': 'windows',
+    }
+
+    found = []
+    for subdir in os.listdir(path):
+      parts = subdir.split('-')
+      if len(parts) < 2:
+        continue
+      our_platform = kPlatformNames.get(platform.system(), platform.system())
+      if parts[0] != our_platform:
+        continue
+      if not self.match_arch(parts[1]):
+        continue
+
+      prefix = os.path.join(path, subdir, name)
+      full_path = self.find_executable(prefix)
+      if not full_path:
+        continue
+      found.append((parts[1], os.path.abspath(full_path)))
+    return found
+
   def find_shells(self):
-    for arch in self.arch_suffixes:
-      if not self.match_arch(arch):
-        continue
+    search_in = os.path.join(self.args.objdir, 'spshell')
+    found = self.find_executables_in(search_in, 'spshell')
 
-      path = os.path.join(self.args.objdir, 'vm', 'spshell' + arch, 'spshell')
-      path = self.find_executable(path)
-
-      if not path:
-        continue
-
+    for arch, path in found:
       env = None
       if self.args.coverage:
         env = self.env_.copy()
         env['LLVM_PROFILE_FILE'] = '{0}/spshell-%9m'.format(self.args.coverage)
-
-      path = os.path.abspath(path)
 
       rc, stdout, stderr = testutil.exec_argv([path, '--version'])
       if rc == 0 and 'JIT' in stdout:
         self.shells.append({
           'path': path,
           'args': [],
-          'name': 'default' + arch,
+          'name': 'default-' + arch,
           'env': env,
           })
 
       self.shells.append({
         'path': path,
         'args': ['--disable-jit'],
-        'name': 'interpreter' + arch,
+        'name': 'interpreter-' + arch,
         'env': env,
       })
 
@@ -134,16 +147,10 @@ class TestPlan(object):
       self.find_spcomp()
 
   def find_spcomp(self):
-    for arch in self.arch_suffixes:
-      if not self.match_arch(arch):
-        continue
+    search_in = os.path.join(self.args.objdir, 'spcomp')
+    found = self.find_executables_in(search_in, 'spcomp')
 
-      path = os.path.join(self.args.objdir, 'compiler', 'spcomp' + arch, 'spcomp')
-      path = self.find_executable(path)
-
-      if not path:
-        continue
-
+    for arch, path in found:
       env = None
       if self.args.coverage:
         env = self.env_.copy()
@@ -171,16 +178,13 @@ class TestPlan(object):
         # configuration.
         continue
 
-      self.modes.append({
-        'name': 'no_phopt',
-        'spcomp': spcomp,
-        'args': ['-O0'],
-      })
-      self.modes.append({
-        'name': 'pcode12',
-        'spcomp': spcomp,
-        'args': ['-x12'],
-      })
+      # Disabled, no optimization for now.
+      #
+      # self.modes.append({
+      #   'name': 'no_phopt',
+      #   'spcomp': spcomp,
+      #   'args': ['-O0'],
+      # })
 
   def find_spcomp2(self):
     for arch in self.arch_suffixes:
@@ -231,9 +235,11 @@ class TestPlan(object):
       path = os.path.join(self.tests_path, local_path)
       if os.path.isdir(path):
         self.find_tests_impl(local_path, manifest)
-      elif path.endswith('.sp'):
-        if self.args.test is not None and not local_path.startswith(self.args.test):
-          continue
+      elif path.endswith('.sp') or path.endswith('.smx'):
+        if self.args.test is not None:
+          if not local_path.startswith(self.args.test) and \
+             not local_path.endswith(self.args.test):
+            continue
 
         test = Test(**{
           'path': os.path.abspath(path),
@@ -273,6 +279,8 @@ class Test(object):
     smx_base_path, ext = os.path.splitext(smx_path)
     if ext == '.sp':
       self.smx_path = smx_base_path + '.smx'
+    elif ext == '.smx':
+      self.smx_path = self.path
     else:
       self.smx_path += '.smx'
 
@@ -342,6 +350,10 @@ class Test(object):
 
   def read_local_manifest(self):
     self.local_manifest_ = {}
+
+    if self.path.endswith('.smx'):
+      return
+
     with open(self.path, 'r') as fp:
       for line in fp:
         if not self.process_manifest_line(line):
@@ -372,6 +384,7 @@ class TestRunner(object):
     self.include_path = os.path.dirname(os.path.abspath(__file__))
     self.start_time_ = datetime.datetime.now()
     self.failures_ = set()
+    self.total_tests_ = 0
 
     # Walk up the test path looking for an 'include' folder.
     search_path, _ = os.path.split(self.include_path)
@@ -392,11 +405,16 @@ class TestRunner(object):
     if len(self.failures_):
       self.print_failures()
       return False
+
+    self.out("Done. {} tests passed.".format(self.total_tests_))
     return True
 
   def run_impl(self):
-    for mode in self.plan.modes:
-      self.run_mode(mode)
+    try:
+      for mode in self.plan.modes:
+        self.run_mode(mode)
+    except KeyboardInterrupt as e:
+      pass
 
   def run_mode(self, mode):
     spcomp = mode['spcomp']
@@ -414,11 +432,15 @@ class TestRunner(object):
         self.failures_.add(test)
 
   def should_compile_only(self, test):
+    if test.path.endswith('.smx'):
+      return False
     if test.type == 'compiler-output' or test.type == 'compile-only':
       return True
     return self.plan.args.compile_only
 
   def run_test(self, mode, test):
+    self.total_tests_ += 1
+
     compile_only = self.should_compile_only(test)
     if compile_only and self.plan.args.runtime_only:
       return True
@@ -426,19 +448,20 @@ class TestRunner(object):
     self.out('Begin test {0}'.format(test.path))
 
     # First run the compiler.
-    rc, stdout, stderr = self.run_compiler(mode, test)
-    if compile_only:
-      if not self.compile_ok(mode, test, rc, stdout, stderr):
+    if not test.path.endswith('.smx'):
+      rc, stdout, stderr = self.run_compiler(mode, test)
+      if compile_only:
+        if not self.compile_ok(mode, test, rc, stdout, stderr):
+          self.out_io(stderr, stdout)
+          return False
+        self.out("PASS")
+        return True
+
+      # If this is a runtime test, the compiler must pass to continue.
+      if rc != 0:
+        self.out("Compile failed, return code {0} (expected 0)".format(rc))
         self.out_io(stderr, stdout)
         return False
-      self.out("PASS")
-      return True
-
-    # If this is a runtime test, the compiler must pass to continue.
-    if rc != 0:
-      self.out("Compile failed, return code {0} (expected 0)".format(rc))
-      self.out_io(stderr, stdout)
-      return False
 
     # Run all shells we found.
     return self.run_shells(mode, test)

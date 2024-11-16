@@ -245,28 +245,18 @@ SourcePawnEngine2::LoadPlugin(ICompilation* co, const char* file, int* err)
   return rt;
 }
 
-IPluginRuntime*
-SourcePawnEngine2::LoadBinaryFromFile(const char* file, char* error, size_t maxlength)
+static IPluginRuntime*
+LoadImage(std::unique_ptr<SmxV1Image> image, const char* file, char* error, size_t maxlength)
 {
-  FILE* fp = fopen(file, "rb");
-
-  if (!fp) {
-    UTIL_Format(error, maxlength, "file not found");
-    return nullptr;
-  }
-
-  ke::AutoPtr<SmxV1Image> image(new SmxV1Image(fp));
-  fclose(fp);
-
   if (!image->validate()) {
     const char* errorMessage = image->errorMessage();
     if (!errorMessage)
-      errorMessage = "file parse error";
+      errorMessage = "binary parse error";
     UTIL_Format(error, maxlength, "%s", errorMessage);
     return nullptr;
   }
 
-  PluginRuntime* pRuntime = new PluginRuntime(image.take());
+  PluginRuntime* pRuntime = new PluginRuntime(image.release());
   if (!pRuntime->Initialize()) {
     delete pRuntime;
 
@@ -287,22 +277,51 @@ SourcePawnEngine2::LoadBinaryFromFile(const char* file, char* error, size_t maxl
     }
   }
 
-  if (!pRuntime->Name())
+  if (*pRuntime->Name() == '\0')
     pRuntime->SetNames(file, file);
 
   return pRuntime;
 }
 
-SPVM_NATIVE_FUNC
-SourcePawnEngine2::CreateFakeNative(SPVM_FAKENATIVE_FUNC callback, void* pData)
+IPluginRuntime*
+SourcePawnEngine2::LoadBinaryFromFile(const char* file, char* error, size_t maxlength)
 {
-  return Environment::get()->stubs()->CreateFakeNativeStub(callback, pData);
+  FILE* fp = fopen(file, "rb");
+
+  if (!fp) {
+    UTIL_Format(error, maxlength, "file not found");
+    return nullptr;
+  }
+
+  std::unique_ptr<SmxV1Image> image(new SmxV1Image(fp));
+  fclose(fp);
+
+  return LoadImage(std::move(image), file, error, maxlength);
+}
+
+IPluginRuntime*
+SourcePawnEngine2::LoadBinaryFromMemory(const char* file, uint8_t* addr, size_t size,
+                                        void (*dtor)(uint8_t*), char* error, size_t maxlength)
+{
+  std::unique_ptr<SmxV1Image> image;
+
+  if (dtor)
+    image = std::make_unique<SmxV1Image>(addr, size, dtor);
+  else
+    image = std::make_unique<SmxV1Image>(addr, size);
+
+  return LoadImage(std::move(image), file, error, maxlength);
+}
+
+SPVM_NATIVE_FUNC
+SourcePawnEngine2::CreateFakeNative(SPVM_FAKENATIVE_FUNC, void*)
+{
+  return nullptr;
 }
 
 void
-SourcePawnEngine2::DestroyFakeNative(SPVM_NATIVE_FUNC func)
+SourcePawnEngine2::DestroyFakeNative(SPVM_NATIVE_FUNC)
 {
-  return Environment::get()->APIv1()->FreePageMemory((void*)func);
 }
 
 #if !defined(SOURCEPAWN_VERSION)
@@ -382,9 +401,9 @@ SourcePawnEngine2::Shutdown()
 IPluginRuntime*
 SourcePawnEngine2::CreateEmptyRuntime(const char* name, uint32_t memory)
 {
-  ke::AutoPtr<EmptyImage> image(new EmptyImage(memory));
+  std::unique_ptr<EmptyImage> image(new EmptyImage(memory));
 
-  PluginRuntime* rt = new PluginRuntime(image.take());
+  PluginRuntime* rt = new PluginRuntime(image.release());
   if (!rt->Initialize()) {
     delete rt;
     return NULL;

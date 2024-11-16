@@ -27,6 +27,7 @@ CodeStubs::InitializeFeatureDetection()
   return true;
 }
 
+#if 0
 bool
 CodeStubs::CompileInvokeStub()
 {
@@ -88,32 +89,13 @@ CodeStubs::CompileInvokeStub()
   __ bind(&error);
   __ jmp(&ret);
 
-  invoke_stub_ = LinkCode(env_, masm);
+  invoke_stub_ = LinkCode(env_, masm, "<jit invoke stub>", {});
   if (!invoke_stub_.address())
     return false;
 
   return_stub_ = reinterpret_cast<uint8_t*>(invoke_stub_.address()) + error.offset();
   return true;
 }
-
-SPVM_NATIVE_FUNC
-CodeStubs::CreateFakeNativeStub(SPVM_FAKENATIVE_FUNC callback, void* pData)
-{
-  MacroAssembler masm;
-
-  __ push(rbp);
-  __ movq(rbp, rsp);
-
-  // Arguments are already set up. We just need to set the third argument.
-  // Note that the stack is aligned too!
-  __ movq(ArgReg2, reinterpret_cast<intptr_t>(pData));
-  __ movq(rax, reinterpret_cast<intptr_t>(reinterpret_cast<void*>(callback)));
-  __ call(rax);
-
-  __ leave();
-  __ ret();
-
-  return (SPVM_NATIVE_FUNC)LinkCodeToLegacyPtr(env_, masm);
-}
+#endif
 
 } // namespace sp

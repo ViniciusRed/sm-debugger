@@ -50,6 +50,7 @@ PluginContext::PluginContext(PluginRuntime* pRuntime)
   sp_ = mem_size_ - sizeof(cell_t);
   stp_ = sp_;
   frm_ = sp_;
+  hp_scope_ = -1;
 }
 
 PluginContext::~PluginContext()
@@ -441,6 +442,8 @@ PluginContext::Invoke(funcid_t fnid, const cell_t* params, unsigned int num_para
   /* Save our previous state. */
   cell_t save_sp = sp_;
   cell_t save_hp = hp_;
+  cell_t save_frm = frm_;
+  cell_t save_hp_scope = hp_scope_;
 
   /* Push parameters */
   sp_ -= sizeof(cell_t) * (num_params + 1);
@@ -453,28 +456,10 @@ PluginContext::Invoke(funcid_t fnid, const cell_t* params, unsigned int num_para
   // Enter the execution engine.
   bool ok = env_->Invoke(this, method, result);
 
-  if (ok) {
-    // Verify that our state is still sane.
-    if (sp_ != save_sp) {
-      env_->ReportErrorFmt(
-        SP_ERROR_STACKLEAK,
-        "Stack leak detected: sp:%d should be %d!", 
-        sp_, 
-        save_sp);
-      return false;
-    }
-    if (hp_ != save_hp) {
-      env_->ReportErrorFmt(
-        SP_ERROR_HEAPLEAK,
-        "Heap leak detected: hp:%d should be %d!", 
-        hp_, 
-        save_hp);
-      return false;
-    }
-  }
-
   sp_ = save_sp;
   hp_ = save_hp;
+  frm_ = save_frm;
+  hp_scope_ = save_hp_scope;
   return ok;
 }
 
@@ -512,6 +497,7 @@ PluginContext::popTrackerAndSetHeap()
 int
 PluginContext::pushTracker(uint32_t amount)
 {
+  assert(!m_pRuntime->UsesHeapScopes());
   if (amount > INT_MAX)
     return SP_ERROR_TRACKER_BOUNDS;
   if (sp_ - hp_ < STACK_MARGIN)
@@ -520,6 +506,38 @@ PluginContext::pushTracker(uint32_t amount)
   *reinterpret_cast<cell_t*>(memory_ + hp_) = amount;
   hp_ += sizeof(cell_t);
   return SP_ERROR_NONE;
+}
+
+bool
+PluginContext::enterHeapScope()
+{
+  auto old_hp_scope = hp_scope_;
+
+  if (!heapAlloc(sizeof(cell_t), &hp_scope_))
+    return false;
+
+  cell_t* scope = throwIfBadAddress(hp_scope_);
+  if (!scope)
+    return false;
+
+  *scope = old_hp_scope;
+  return true;
+}
+
+bool
+PluginContext::leaveHeapScope()
+{
+  cell_t* scope = throwIfBadAddress(hp_scope_);
+  if (!scope)
+    return false;
+
+  auto prev_hp_scope = *scope;
+  hp_ = hp_scope_;
+  hp_scope_ = prev_hp_scope;
+
+  if (hp_scope_ != -1 && !throwIfBadAddress(hp_scope_))
+    return false;
+  return true;
 }
 
 struct array_creation_t
@@ -580,13 +598,12 @@ GenerateArrayIndirectionVectors(cell_t* arraybase, cell_t dims[], cell_t _dimcou
   cell_t data_offs;
 
   /* Reverse the dimensions */
-  cell_t dim_list[sDIMEN_MAX];
-  int cur_dim = 0;
+  std::vector<cell_t> dim_list;
   for (int i = _dimcount - 1; i >= 0; i--)
-    dim_list[cur_dim++] = dims[i];
+    dim_list.emplace_back(dims[i]);
   
   ar.base = arraybase;
-  ar.dim_list = dim_list;
+  ar.dim_list = &dim_list[0];
   ar.dim_count = _dimcount;
   ar.data_offs = &data_offs;
 
@@ -683,14 +700,15 @@ PluginContext::generateFullArray(uint32_t argc, cell_t* argv, int autozero)
     return SP_ERROR_ARRAY_TOO_BIG;
 
   uint32_t new_hp = hp_ + bytes;
-  cell_t* dat_hp = reinterpret_cast<cell_t*>(memory_ + new_hp);
-
-  // argv, coincidentally, is STK.
-  if (dat_hp >= argv - STACK_MARGIN)
+  if (new_hp >= sp_ - STACK_MARGIN)
     return SP_ERROR_HEAPLOW;
 
   cell_t* base = reinterpret_cast<cell_t*>(memory_ + hp_);
   LegacyImage* image = runtime()->image();
+
+  if (autozero) {
+    memset(reinterpret_cast<uint8_t*>(base) + iv_size, 0, bytes - iv_size);
+  }
 
   if (image->DescribeCode().features & SmxConsts::kCodeFeatureDirectArrays) {
     abs_iv_data_t info;
@@ -704,10 +722,6 @@ PluginContext::generateFullArray(uint32_t argc, cell_t* argv, int autozero)
 
     assert(info.iv_cursor == iv_size);
     assert(info.data_cursor == (cell_t)bytes);
-
-    if (autozero) {
-      memset(info.ptr + iv_size, 0, bytes - iv_size);
-    }
   } else {
     cell_t offs = GenerateArrayIndirectionVectors(base, argv, argc);
     assert(size_t(offs) == cells);
@@ -717,8 +731,10 @@ PluginContext::generateFullArray(uint32_t argc, cell_t* argv, int autozero)
   argv[argc - 1] = hp_;
   hp_ = new_hp;
 
-  if (int err = pushTracker(bytes))
-    return err;
+  if (!m_pRuntime->UsesHeapScopes()) {
+    if (int err = pushTracker(bytes))
+      return err;
+  }
   return SP_ERROR_NONE;
 }
 
@@ -737,11 +753,13 @@ PluginContext::generateArray(cell_t dims, cell_t* stk, bool autozero)
       return SP_ERROR_HEAPLOW;
 
     hp_ += bytes;
-    if (int err = pushTracker(bytes))
-      return err;
+    if (!m_pRuntime->UsesHeapScopes()) {
+      if (int err = pushTracker(bytes))
+        return err;
+    }
 
     if (autozero)
-      memset(memory_ + hp_, 0, bytes);
+      memset(memory_ + *stk, 0, bytes);
 
     return SP_ERROR_NONE;
   }
@@ -935,38 +953,128 @@ PluginContext::addStack(cell_t amount)
   return true;
 }
 
-int
-PluginContext::rebaseArray(cell_t array_addr,
-                           cell_t dat_addr,
-                           cell_t iv_size,
-                           cell_t data_size)
+bool
+PluginContext::initArray(cell_t array_addr,
+                         cell_t dat_addr,
+                         cell_t iv_size,
+                         cell_t data_copy_size,
+                         cell_t data_fill_size,
+                         cell_t fill_value)
 {
   int err;
 
   cell_t* iv_vec;
-  if ((err = LocalToPhysAddr(array_addr, &iv_vec)) != SP_ERROR_NONE)
-    return err;
-
-  cell_t* data_vec;
-  if ((err = LocalToPhysAddr(array_addr + iv_size, &data_vec)) != SP_ERROR_NONE)
-    return err;
-
-  cell_t* tpl_iv_vec;
-  if ((err = LocalToPhysAddr(dat_addr, &tpl_iv_vec)) != SP_ERROR_NONE)
-    return err;
-
-  cell_t* tpl_data_vec;
-  if ((err = LocalToPhysAddr(dat_addr + iv_size, &tpl_data_vec)) != SP_ERROR_NONE)
-    return err;
-
-  assert(iv_vec < data_vec);
-  assert(tpl_iv_vec < tpl_data_vec);
-
-  while (iv_vec < data_vec) {
-    *iv_vec = *tpl_iv_vec + array_addr;
-    iv_vec++;
-    tpl_iv_vec++;
+  if ((err = LocalToPhysAddr(array_addr, &iv_vec)) != SP_ERROR_NONE) {
+    ReportErrorNumber(err);
+    return false;
   }
-  memcpy(data_vec, tpl_data_vec, data_size);
-  return SP_ERROR_NONE;
+
+  // Note: we don't use LocalToPhysAddr here because the address could be the
+  // very end of DAT and it could throw an error.
+  cell_t* data_vec = iv_vec + iv_size;
+  assert(iv_vec <= data_vec);
+
+  cell_t* mem_end = reinterpret_cast<cell_t*>(memory_ + mem_size_);
+  if (data_vec + data_copy_size + data_fill_size - 1 >= mem_end) {
+      ReportErrorNumber(SP_ERROR_INVALID_ADDRESS);
+      return false;
+  }
+
+  // Only attempt address conversions if there's a template to copy from.
+  if (iv_size || data_copy_size) {
+    cell_t* tpl_iv_vec;
+    if ((err = LocalToPhysAddr(dat_addr, &tpl_iv_vec)) != SP_ERROR_NONE) {
+      ReportErrorNumber(err);
+      return false;
+    }
+
+    cell_t* tpl_data_vec = tpl_iv_vec + iv_size;
+    assert(tpl_iv_vec <= tpl_data_vec);
+
+    cell_t* dat_end = reinterpret_cast<cell_t*>(memory_ + data_size_);
+    if (tpl_data_vec + data_copy_size - 1 >= dat_end) {
+      ReportErrorNumber(SP_ERROR_INVALID_ADDRESS);
+      return false;
+    }
+
+    while (iv_vec < data_vec) {
+      *iv_vec = *tpl_iv_vec + array_addr;
+      iv_vec++;
+      tpl_iv_vec++;
+    }
+    memcpy(data_vec, tpl_data_vec, data_copy_size * sizeof(cell_t));
+  }
+
+  if (!data_fill_size)
+    return true;
+
+  cell_t* fill_pos = data_vec + data_copy_size;
+  if (fill_value) {
+    cell_t* fill_end = fill_pos + data_fill_size;
+    while (fill_pos < fill_end)
+      *fill_pos++ = fill_value;
+  } else {
+    memset(fill_pos, 0, data_fill_size * sizeof(cell_t));
+  }
+  return true;
+}
+
+bool
+PluginContext::HeapAlloc2dArray(unsigned int length, unsigned int stride, cell_t* local_addr,
+                                const cell_t* init)
+{
+  if (length > INT_MAX || stride > INT_MAX) {
+    ReportErrorNumber(SP_ERROR_ARRAY_TOO_BIG);
+    return false;
+  }
+
+  cell_t argv[2] = { (cell_t)stride, (cell_t)length };
+  int rv = generateFullArray(2, argv, !init);
+  if (rv != SP_ERROR_NONE) {
+    ReportErrorNumber(rv);
+    return false;
+  }
+
+  cell_t array_base = argv[1];
+  *local_addr = array_base;
+
+  cell_t* array_phys;
+  if ((rv = LocalToPhysAddr(array_base, &array_phys)) != SP_ERROR_NONE) {
+    ReportErrorNumber(rv);
+    return false;
+  }
+
+  if (!init)
+    return true;
+
+  bool direct_arrays = m_pRuntime->UsesDirectArrays();
+  for (unsigned int i = 0; i < length; i++) {
+    cell_t elt_base;
+
+    if (direct_arrays)
+      elt_base = array_phys[i];
+    else
+      elt_base = array_base + (i * sizeof(cell_t)) + array_phys[i];
+
+    cell_t* elt_phys;
+    if ((rv = LocalToPhysAddr(elt_base, &elt_phys)) != SP_ERROR_NONE) {
+      ReportErrorNumber(rv);
+      return false;
+    }
+
+    memcpy(elt_phys, &init[i * stride], stride * sizeof(cell_t));
+  }
+  return true;
+}
+
+void
+PluginContext::EnterHeapScope()
+{
+  enterHeapScope();
+}
+
+void
+PluginContext::LeaveHeapScope()
+{
+  leaveHeapScope();
 }

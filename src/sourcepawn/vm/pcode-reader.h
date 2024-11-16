@@ -42,6 +42,7 @@ class PcodeReader
     auto& code = rt->code();
     code_ = reinterpret_cast<const cell_t*>(code.bytes);
     cip_ = code_ + (startOffset / sizeof(cell_t));
+    insn_begin_ = cip_;
     stop_at_ = reinterpret_cast<const cell_t*>(code.bytes + code.length);
   }
   PcodeReader(PluginRuntime* rt, Block* block, T* visitor)
@@ -54,6 +55,7 @@ class PcodeReader
     auto& code = rt->code();
     code_ = reinterpret_cast<const cell_t*>(code.bytes);
     cip_ = reinterpret_cast<const cell_t*>(block->start());
+    insn_begin_ = cip_;
 
     const uint8_t* end = block->end();
     if (block->endType() == BlockEnd::Insn)
@@ -69,6 +71,7 @@ class PcodeReader
 
   // Read the next opcode, return true on success, false otherwise.
   bool visitNext() {
+    insn_begin_ = cip_;
     OPCODE op = (OPCODE)readCell();
     return visitOp(op);
   }
@@ -85,8 +88,13 @@ class PcodeReader
   }
 
   // Return the current position in the code stream.
-  const cell_t* const& cip() const {
+  const cell_t* cip() const {
     return cip_;
+  }
+
+  // Return the start of the current instruction.
+  const cell_t* const& insn_begin() const {
+    return insn_begin_;
   }
   cell_t cip_offset() const {
     return (cip_ - code_) * sizeof(cell_t);
@@ -637,13 +645,23 @@ class PcodeReader
       return true;
     }
 
-    case OP_REBASE:
+    case OP_INITARRAY_PRI:
+    case OP_INITARRAY_ALT:
     {
+      PawnReg reg = (op == OP_INITARRAY_PRI) ? PawnReg::Pri : PawnReg::Alt;
       cell_t addr = readCell();
       cell_t iv_size = readCell();
-      cell_t data_size = readCell();
-      return visitor_->visitREBASE(addr, iv_size, data_size);
+      cell_t data_copy_size = readCell();
+      cell_t data_fill_size = readCell();
+      cell_t fill_value = readCell();
+      return visitor_->visitINITARRAY(reg, addr, iv_size, data_copy_size, data_fill_size,
+                                      fill_value);
     }
+
+    case OP_HEAP_SAVE:
+      return visitor_->visitHEAP_SAVE();
+    case OP_HEAP_RESTORE:
+      return visitor_->visitHEAP_RESTORE();
 
     default:
       assert(false);
@@ -666,6 +684,7 @@ class PcodeReader
   PluginRuntime* rt_;
   T* visitor_;
   const cell_t* code_;
+  const cell_t* insn_begin_;
   const cell_t* cip_;
   const cell_t* stop_at_;
 };

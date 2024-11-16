@@ -11,18 +11,23 @@
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
 //
 #include "plugin-runtime.h"
+
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
+
+#include <unordered_set>
+#include <deque>
+
 #include <smx/smx-v1-opcodes.h>
+#include "builtins.h"
 #include "compiled-function.h"
 #include "environment.h"
-#include "method-info.h"
-#include "plugin-context.h"
-#include "builtins.h"
-
 #include "md5/md5.h"
+#include "method-info.h"
+#include "method-verifier.h"
+#include "plugin-context.h"
 
 using namespace sp;
 using namespace SourcePawn;
@@ -38,7 +43,7 @@ PluginRuntime::PluginRuntime(LegacyImage* image)
   memset(code_hash_, 0, sizeof(code_hash_));
   memset(data_hash_, 0, sizeof(data_hash_));
 
-  ke::AutoLock lock(Environment::get()->lock());
+  std::lock_guard<ke::Mutex> lock(Environment::get()->lock());
   Environment::get()->RegisterRuntime(this);
 }
 
@@ -48,7 +53,7 @@ PluginRuntime::~PluginRuntime()
   // runtimes. It is not enough to ensure that the unlinking of the runtime is
   // protected; we cannot delete functions or code while the watchdog might be
   // executing. Therefore, the entire destructor is guarded.
-  ke::AutoLock lock(Environment::get()->lock());
+  std::lock_guard<ke::Mutex> lock(Environment::get()->lock());
 
   Environment::get()->DeregisterRuntime(this);
 
@@ -61,7 +66,7 @@ PluginRuntime::Initialize()
 {
   if (!ke::IsAligned(code_.bytes, sizeof(cell_t))) {
     // Align the code section.
-    aligned_code_ = MakeUnique<uint8_t[]>(code_.length);
+    aligned_code_ = std::make_unique<uint8_t[]>(code_.length);
     if (!aligned_code_)
       return false;
 
@@ -69,26 +74,26 @@ PluginRuntime::Initialize()
     code_.bytes = aligned_code_.get();
   }
 
-  natives_ = MakeUnique<NativeEntry[]>(image_->NumNatives());
+  natives_ = std::make_unique<NativeEntry[]>(image_->NumNatives());
   if (!natives_)
     return false;
 
-  publics_ = MakeUnique<sp_public_t[]>(image_->NumPublics());
+  publics_ = std::make_unique<sp_public_t[]>(image_->NumPublics());
   if (!publics_)
     return false;
   memset(publics_.get(), 0, sizeof(sp_public_t) * image_->NumPublics());
 
-  pubvars_ = MakeUnique<sp_pubvar_t[]>(image_->NumPubvars());
+  pubvars_ = std::make_unique<sp_pubvar_t[]>(image_->NumPubvars());
   if (!pubvars_)
     return false;
   memset(pubvars_.get(), 0, sizeof(sp_pubvar_t) * image_->NumPubvars());
 
-  entrypoints_ = MakeUnique<ScriptedInvoker*[]>(image_->NumPublics());
+  entrypoints_ = std::make_unique<ScriptedInvoker*[]>(image_->NumPublics());
   if (!entrypoints_)
     return false;
   memset(entrypoints_.get(), 0, sizeof(ScriptedInvoker*) * image_->NumPublics());
 
-  context_ = new PluginContext(this);
+  context_ = std::make_unique<PluginContext>(this);
   if (!context_->Initialize())
     return false;
 
@@ -145,7 +150,7 @@ static const NativeMapping sNativeMap[] = {
 void
 PluginRuntime::SetupFloatNativeRemapping()
 {
-  float_table_ = MakeUnique<floattbl_t[]>(image_->NumNatives());
+  float_table_ = std::make_unique<floattbl_t[]>(image_->NumNatives());
   for (size_t i = 0; i < image_->NumNatives(); i++) {
     const char* name = image_->GetNative(i);
     const NativeMapping* iter = sNativeMap;
@@ -235,17 +240,16 @@ PluginRuntime::AcquireMethod(cell_t pcode_offset)
   // Grab the lock before linking code in, since the watchdog timer will look
   // at this list on another thread.
   {
-    ke::AutoLock lock(Environment::get()->lock());
-    if (!methods_.append(method))
-      return nullptr;
+    std::lock_guard<ke::Mutex> lock(Environment::get()->lock());
+    methods_.push_back(method);
   }
   return method;
 }
 
-const ke::Vector<RefPtr<MethodInfo>>&
+const std::vector<RefPtr<MethodInfo>>&
 PluginRuntime::AllMethods() const
 {
-  Environment::get()->lock()->AssertCurrentThreadOwns();
+  Environment::get()->lock().AssertCurrentThreadOwns();
   return methods_;
 }
 
@@ -286,9 +290,35 @@ PluginRuntime::UpdateNativeBinding(uint32_t index, SPVM_NATIVE_FUNC pfn, uint32_
   }
 
   native->legacy_fn = pfn;
-  native->status = pfn
-                   ? SP_NATIVE_BOUND
-                   : SP_NATIVE_UNBOUND;
+  native->callback = nullptr;
+  native->status = pfn ? SP_NATIVE_BOUND : SP_NATIVE_UNBOUND;
+  native->flags = flags;
+  native->user = data;
+  return SP_ERROR_NONE;
+}
+
+int
+PluginRuntime::UpdateNativeBindingObject(uint32_t index, INativeCallback* callback, uint32_t flags,
+                                         void* data)
+{
+  RefPtr<INativeCallback> holder(callback);
+  if (index >= image_->NumNatives())
+    return SP_ERROR_INDEX;
+
+  NativeEntry* native = &natives_[index];
+
+  // The native must either be unbound, or it must be ephemeral or optional.
+  // Otherwise, we've already baked its address in at callsites and it's too
+  // late to fix them.
+  if (native->status == SP_NATIVE_BOUND &&
+      !(native->flags & (SP_NTVFLAG_OPTIONAL|SP_NTVFLAG_EPHEMERAL)))
+  {
+    return SP_ERROR_PARAM;
+  }
+
+  native->legacy_fn = nullptr;
+  native->callback = callback;
+  native->status = callback ? SP_NATIVE_BOUND : SP_NATIVE_UNBOUND;
   native->flags = flags;
   native->user = data;
   return SP_ERROR_NONE;
@@ -404,7 +434,7 @@ PluginRuntime::GetPubVarsNum()
 IPluginContext*
 PluginRuntime::GetDefaultContext()
 {
-  return context_;
+  return context_.get();
 }
 
 IPluginDebugInfo*
@@ -516,7 +546,7 @@ PluginRuntime::GetDataHash()
 PluginContext*
 PluginRuntime::GetBaseContext()
 {
-  return context_;
+  return context_.get();
 }
 
 int
@@ -581,4 +611,65 @@ PluginRuntime::LookupLineAddress(const uint32_t line, const char* file, ucell_t*
   if (!image_->LookupLineAddress(line, file, addr))
     return SP_ERROR_NOT_FOUND;
   return SP_ERROR_NONE;
+}
+
+bool
+PluginRuntime::PerformFullValidation()
+{
+  std::unordered_set<cell_t> seen;
+  std::deque<cell_t> work;
+
+  Environment* env = Environment::get();
+  for (size_t i = 0; i < GetPublicsNum(); i++) {
+    int err;
+    sp_public_t* fun;
+    if ((err = GetPublicByIndex(i, &fun)) != SP_ERROR_NONE) {
+      env->ReportErrorFmt(SP_ERROR_USER, "Could not get public function at index %" KE_FMT_SIZET "\n", i);
+      return false;
+    }
+    assert(seen.find(fun->code_offs) == seen.end());
+    seen.insert(fun->code_offs);
+    work.push_back(fun->code_offs);
+  }
+
+  auto onExternFuncRef = [&seen, &work](cell_t offset) -> void {
+    if (seen.find(offset) != seen.end())
+      return;
+    seen.insert(offset);
+    work.push_back(offset);
+  };
+
+  while (!work.empty()) {
+    cell_t offset = work.front();
+    work.pop_front();
+
+    const char* name;
+    int err = GetDebugInfo()->LookupFunction(offset, &name);
+    if (err != SP_ERROR_NONE)
+      name = "<unknown>";
+
+    MethodVerifier verifier(this, offset);
+    verifier.collectExternalFuncRefs(onExternFuncRef);
+
+    if (!verifier.verify()) {
+      env->ReportErrorFmt(SP_ERROR_USER, "Method %s failed verification: %s\n", name,
+                          env->GetErrorString(verifier.error()));
+      return false;
+    }
+  }
+  return true;
+}
+
+bool
+PluginRuntime::UsesDirectArrays()
+{
+  auto features = image()->DescribeCode().features;
+  return !!(features & SmxConsts::kCodeFeatureDirectArrays);
+}
+
+bool
+PluginRuntime::UsesHeapScopes()
+{
+  auto features = image()->DescribeCode().features;
+  return !!(features & SmxConsts::kCodeFeatureHeapScopes);
 }

@@ -24,56 +24,37 @@
 #ifndef am_sourcepawn_compiler_sc3_h
 #define am_sourcepawn_compiler_sc3_h
 
-#include "amx.h"
+#include "lexer.h"
 #include "parse-node.h"
 #include "sc.h"
 
+class SemaContext;
 struct value;
 struct svalue;
 
-class ExpressionParser
-{
-  protected:
-    static int nextop(int* opidx, int* list);
-
-    // Each of these lists is an operator precedence level, and each list is a
-    // zero-terminated list of operators in that level (in precedence order).
-    static int list3[];
-    static int list4[];
-    static int list5[];
-    static int list6[];
-    static int list7[];
-    static int list8[];
-    static int list9[];
-    static int list10[];
-    static int list11[];
-    static int list12[];
-};
+int NextExprOp(Lexer* lexer, int* opidx, int* list);
 
 #define MATCHTAG_COERCE 0x1      // allow coercion
 #define MATCHTAG_SILENT 0x2      // silence the error(213) warning
-#define MATCHTAG_COMMUTATIVE 0x4 // order does not matter
-#define MATCHTAG_DEDUCE 0x8      // correct coercion
+#define MATCHTAG_DEDUCE 0x4      // correct coercion
+#define MATCHTAG_FUNCARG 0x8     // argument in a function signature
+#define MATCHTAG_ENUM_ASSN 0x10  // enum assignment
 
-bool find_userop(void (*oper)(), int tag1, int tag2, int numparam, const value* lval, UserOperation* op);
+struct UserOperation;
+bool find_userop(SemaContext& sc, int oper, int tag1, int tag2, int numparam,
+                 const value* lval, UserOperation* op);
 void emit_userop(const UserOperation& user_op, value* lval);
 
-int findnamedarg(arginfo* arg, const char* name);
-cell array_totalsize(symbol* sym);
-cell array_levelsize(symbol* sym, int level);
-int commutative(void (*oper)());
-cell calc(cell left, void (*oper)(), cell right, char* boolresult);
+int commutative(int oper);
+cell calc(cell left, int oper_tok, cell right, char* boolresult);
 bool is_valid_index_tag(int tag);
-int check_userop(void (*oper)(void), int tag1, int tag2, int numparam, value* lval, int* resulttag);
-int matchtag(int formaltag, int actualtag, int allowcoerce);
-int expression(cell* val, int* tag, symbol** symptr, int chkfuncresult, value* _lval);
+int matchtag(int formaltag, int actualtag, int flags);
+int matchtag_commutative(int formaltag, int actualtag, int flags);
 int matchtag_string(int ident, int tag);
 int checkval_string(const value* sym1, const value* sym2);
 int checktag_string(int tag, const value* sym1);
-int lvalexpr(svalue* sval);
 void user_inc();
 void user_dec();
 int checktag(int tag, int exprtag);
-void setdefarray(cell* string, cell size, cell array_sz, cell* dataaddr, int fconst);
 
 #endif // am_sourcepawn_compiler_sc3_h

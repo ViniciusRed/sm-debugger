@@ -142,6 +142,16 @@ static void BindNative(IPluginRuntime* rt, const char* name, SPVM_NATIVE_FUNC fn
   rt->UpdateNativeBinding(index, fn, 0, nullptr);
 }
 
+static void BindNative(IPluginRuntime* rt, const char* name, INativeCallback* callback)
+{
+  int err;
+  uint32_t index;
+  if ((err = rt->FindNativeByName(name, &index)) != SP_ERROR_NONE)
+    return;
+
+  rt->UpdateNativeBindingObject(index, callback, 0, nullptr);
+}
+
 static cell_t PrintFloat(IPluginContext* cx, const cell_t* params)
 {
   return printf("%f\n", sp_ctof(params[1]));
@@ -189,16 +199,90 @@ static cell_t ReportError(IPluginContext* cx, const cell_t* params)
   return 0;
 }
 
+static cell_t Access2DArray(IPluginContext* cx, const cell_t* params)
+{
+  cell_t* phys_in;
+  cell_t* phys_out;
+
+  if (!cx->GetRuntime()->UsesDirectArrays())
+    return 0;
+
+  int err;
+  if ((err = cx->LocalToPhysAddr(params[1], &phys_in)) != SP_ERROR_NONE)
+    return cx->ThrowNativeErrorEx(err, "Could not read argument");
+  if ((err = cx->LocalToPhysAddr(params[4], &phys_out)) != SP_ERROR_NONE)
+    return cx->ThrowNativeErrorEx(err, "Could not read argument");
+  if ((err = cx->LocalToPhysAddr(phys_in[params[2]], &phys_in)) != SP_ERROR_NONE)
+    return cx->ThrowNativeErrorEx(err, "Could not read array level 0");
+
+  *phys_out = phys_in[params[3]];
+  return 1;
+}
+
+static cell_t Copy2dArrayToCallback(IPluginContext* cx, const cell_t* params)
+{
+  cell_t* flat_array;
+
+  int err;
+  if ((err = cx->LocalToPhysAddr(params[1], &flat_array)) != SP_ERROR_NONE)
+    return cx->ThrowNativeErrorEx(err, "Could not read argument 1");
+
+  IPluginFunction* fn = cx->GetFunctionById(params[4]);
+  if (!fn)
+    return cx->ThrowNativeError("Could not read argument 4");
+
+  AutoEnterHeapScope heap_scope(cx);
+
+  cell_t addr;
+  if (!cx->HeapAlloc2dArray(params[2], params[3], &addr, flat_array))
+    return 0;
+
+  cell_t ignore;
+  fn->PushCell(addr);
+  fn->PushCell(params[2]);
+  fn->PushCell(params[3]);
+  fn->Execute(&ignore);
+  return 0;
+}
+
+class DynamicNative : public INativeCallback
+{
+  public:
+    explicit DynamicNative()
+    {}
+
+    void AddRef() override {
+      refcount_++;
+    }
+    void Release() override {
+      assert(refcount_ > 0);
+      if (--refcount_ == 0)
+        delete this;
+    }
+    int Invoke(IPluginContext* cx, const cell_t* params) override {
+      if (params[0] != 1) {
+        cx->ReportError("wrong param count");
+        return 0;
+      }
+      return params[1];
+    }
+
+  private:
+    uintptr_t refcount_ = 0;
+};
+
 static int Execute(const char* file)
 {
   char error[255];
-  AutoPtr<IPluginRuntime> rtb(sEnv->APIv2()->LoadBinaryFromFile(file, error, sizeof(error)));
+  std::unique_ptr<IPluginRuntime> rtb(sEnv->APIv2()->LoadBinaryFromFile(file, error, sizeof(error)));
   if (!rtb) {
     fprintf(stderr, "Could not load plugin %s: %s\n", file, error);
     return 1;
   }
 
-  PluginRuntime* rt = PluginRuntime::FromAPI(rtb);
+  PluginRuntime* rt = PluginRuntime::FromAPI(rtb.get());
+
+  ke::RefPtr<DynamicNative> dynamic_native(new DynamicNative());
 
   rt->InstallBuiltinNatives();
   BindNative(rt, "print", Print);
@@ -213,6 +297,9 @@ static int Execute(const char* file)
   BindNative(rt, "dump_stack_trace", DumpStackTrace);
   BindNative(rt, "report_error", ReportError);
   BindNative(rt, "CloseHandle", DoNothing);
+  BindNative(rt, "dynamic_native", dynamic_native.get());
+  BindNative(rt, "access_2d_array", Access2DArray);
+  BindNative(rt, "copy_2d_array_to_callback", Copy2dArrayToCallback);
 
   IPluginFunction* fun = rt->GetFunctionByName("main");
   if (!fun)
@@ -246,14 +333,22 @@ int main(int argc, char** argv)
 
   Parser parser("SourcePawn standalone shell.");
 
-  BoolOption disable_jit(parser,
+  ToggleOption disable_jit(parser,
     "i", "disable-jit",
     Some(false),
     "Disable the just-in-time compiler.");
-  BoolOption disable_watchdog(parser,
+  ToggleOption disable_watchdog(parser,
     "w", "disable-watchdog",
     Some(false),
     "Disable the watchdog timer.");
+  ToggleOption enable_jitdump(parser,
+    "p", "jitdump",
+    Some(false),
+    "Enable perf metadata recording for profiling.");
+  ToggleOption validate_debug_sections(parser,
+    "d", "validate-debug-sections",
+    Some(false),
+    "Validate debug sections before loading the plugin. Enables line debugging in the runtime, which might slow down execution.");
   StringOption filename(parser,
     "file",
     "SMX file to execute.");
@@ -284,13 +379,20 @@ int main(int argc, char** argv)
   if (getenv("DISABLE_JIT") || disable_jit.value())
     sEnv->SetJitEnabled(false);
 
+  if (getenv("VALIDATE_DEBUG_SECTIONS") || validate_debug_sections.value())
+    sEnv->EnableDebugBreak();
+
   ShellDebugListener debug;
   sEnv->SetDebugger(&debug);
 
   if (!getenv("DISABLE_WATCHDOG") && !disable_watchdog.value())
     sEnv->InstallWatchdogTimer(5000);
 
-  int errcode = Execute(filename.value().chars());
+  if (enable_jitdump.value()) {
+    sEnv->SetDebugMetadataFlags(JIT_DEBUG_PERF_BASIC | JIT_DEBUG_PERF_JITDUMP);
+  }
+
+  int errcode = Execute(filename.value().c_str());
 
   sEnv->SetDebugger(NULL);
   sEnv->Shutdown();

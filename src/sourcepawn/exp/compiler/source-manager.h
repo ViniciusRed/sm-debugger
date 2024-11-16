@@ -18,11 +18,12 @@
 #ifndef _include_spcomp_source_cache_h_
 #define _include_spcomp_source_cache_h_
 
+#include <memory>
+
 #include <amtl/am-string.h>
 #include <amtl/am-refcounting.h>
 #include <amtl/am-vector.h>
 #include <amtl/am-fixedarray.h>
-#include <amtl/am-autoptr.h>
 #include "macros.h"
 #include "token-kind.h"
 
@@ -60,7 +61,7 @@ class SourceFile : public Refcounted<SourceFile>
     return length_;
   }
   const char* path() const {
-    return path_.chars();
+    return path_.c_str();
   }
 
   LineExtents* lineCache() {
@@ -69,10 +70,10 @@ class SourceFile : public Refcounted<SourceFile>
   void computeLineCache();
 
  protected:
-  AutoPtr<char[]> chars_;
+  std::unique_ptr<char[]> chars_;
   uint32_t length_;
-  AutoPtr<LineExtents> line_cache_;
-  AString path_;
+  std::unique_ptr<LineExtents> line_cache_;
+  std::string path_;
 };
 
 struct FullMacroRef
@@ -112,8 +113,8 @@ struct FullSourceRef
 
 struct TokenHistory
 {
-  Vector<FullMacroRef> macros;
-  Vector<FullSourceRef> files;
+  std::vector<FullMacroRef> macros;
+  std::vector<FullSourceRef> files;
 };
 
 // An LREntry is created each time we register a range of locations (it is
@@ -213,7 +214,7 @@ class SourceManager
 
   RefPtr<SourceFile> open(ReportingContext& cc, const char* path);
 
-  RefPtr<SourceFile> createFromBuffer(UniquePtr<char[]>&& buffer, uint32_t length, const char* path);
+  RefPtr<SourceFile> createFromBuffer(std::unique_ptr<char[]>&& buffer, uint32_t length, const char* path);
 
   // Returns whether two source locations ultimately originate from the same
   // file (i.e., ignoring macros).
@@ -274,7 +275,7 @@ class SourceManager
   StringPool& strings_;
   ReportManager& rr_;
   AtomMap<RefPtr<SourceFile>> file_cache_;
-  Vector<LREntry> locations_;
+  std::vector<LREntry> locations_;
 
   // Source ids start from 1. The source file id is 1 + len(source) + 1. This
   // lets us store source locations as a single integer, as we can always

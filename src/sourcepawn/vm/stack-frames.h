@@ -13,9 +13,12 @@
 #ifndef _include_sourcepawn_vm_stack_frames_h_
 #define _include_sourcepawn_vm_stack_frames_h_
 
-#include <sp_vm_api.h>
 #include <assert.h>
-#include <am-cxx.h>
+
+#include <memory>
+
+#include <sp_vm_api.h>
+#include <amtl/am-cxx.h>
 #include <amtl/am-platform.h>
 #include <amtl/am-refcounting.h>
 #include <amtl/am-enum.h>

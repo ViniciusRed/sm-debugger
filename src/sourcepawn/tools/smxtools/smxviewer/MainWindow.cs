@@ -226,6 +226,7 @@ namespace smxviewer
                 renderDebugGlobals(roots[".dbg.globals"], file_.DebugGlobals);
             if (roots.ContainsKey(".dbg.methods") && file_.DebugMethods != null)
             {
+                renderDebugMethods(roots[".dbg.methods"], file_.DebugMethods);
                 if (roots.ContainsKey(".dbg.locals"))
                     renderDebugLocals(roots[".dbg.locals"], file_.DebugMethods);
             }
@@ -510,7 +511,7 @@ namespace smxviewer
                 addDetailLine("flags = 0x{0:x} ; {0}", code.Header.Flags, code.Header.Flags.ToString());
                 addDetailLine("main = 0x{0:x}", code.Header.main);
                 addDetailLine("codeoffs = 0x{0:x}", code.Header.codeoffs);
-                addDetailLine("features = 0x{0:x}", code.Header.features);
+                addDetailLine("features = 0x{0:x} ; {0}", code.Header.features, code.Header.features.ToString());
                 endDetailUpdate();
             }, code);
 
@@ -728,6 +729,7 @@ namespace smxviewer
         private void renderSymbolDetail(DebugVarEntry sym)
         {
             startDetail("; {0}", file_.Names.StringAt(sym.name_offset));
+            addDetailLine("index = {0}", sym.index);
             if (sym.address < 0)
                 addDetailLine("address = -0x{0:x}", -sym.address);
             else
@@ -861,6 +863,22 @@ namespace smxviewer
             }
         }
 
+        private void renderDebugMethods(TreeNode root, SmxDebugMethods methods)
+        {
+            root.Tag = new NodeData(delegate ()
+            {
+                renderSectionHeaderDetail(methods.SectionHeader);
+                foreach (var entry in methods.Entries)
+                {
+                    var method_name = "";
+                    if (file_.RttiMethods != null && entry.method_index < file_.RttiMethods.Methods.Length)
+                        method_name = file_.RttiMethods.Methods[entry.method_index].name;
+                    addDetailLine("method {0} ({1}), first local index {2}", entry.method_index, method_name, entry.first_local);
+                }
+                endDetailUpdate();
+            }, null);
+        }
+
         private void renderDebugLocals(TreeNode root, SmxDebugMethods table)
         {
             for (int i = 0; i < table.Entries.Length; i++)
@@ -977,7 +995,7 @@ namespace smxviewer
                 }, null);
 
                 int stop_at = (i == table.Entries.Length - 1)
-                              ? file_.RttiEnumStructs.Entries.Length
+                              ? file_.RttiEnumStructFields.Entries.Length
                               : table.Entries[i + 1].first_field;
                 for (int field_index = entry.first_field; field_index < stop_at; field_index++)
                 {
@@ -1103,17 +1121,19 @@ namespace smxviewer
                 endDetailUpdate();
             }, null);
 
+            int index = 0;
             foreach (var method in table.Methods)
             {
                 var node = root.Nodes.Add(method.name);
+                int table_index = index++;
                 node.Tag = new NodeData(delegate ()
                 {
                     string signature = file_.RttiData.FunctionTypeFromOffset(method.signature);
                     startDetailUpdate();
-                    addDetailLine("name = {0}", method.name);
-                    addDetailLine("pcode_start = 0x{0:x}", method.pcode_start);
-                    addDetailLine("pcode_end = 0x{0:x}", method.pcode_end);
-                    addDetailLine("signature = 0x{0:x}", method.signature);
+                    addDetailLine("name = {0} ; tableindex={1}", method.name, table_index);
+                    addDetailLine("pcode_start = 0x{0:x} ; {1}", method.pcode_start, method.pcode_start);
+                    addDetailLine("pcode_end = 0x{0:x} ; {1}", method.pcode_end, method.pcode_end);
+                    addDetailLine("signature = 0x{0:x} ; {1}", method.signature, method.signature);
                     addDetailLine("---");
                     addDetailLine("{0}", signature);
                     endDetailUpdate();

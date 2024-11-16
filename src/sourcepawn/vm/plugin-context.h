@@ -57,7 +57,10 @@ class PluginContext : public BasePluginContext
   int LocalToStringNULL(cell_t local_addr, char** addr) override;
   IPluginRuntime* GetRuntime() override;
   cell_t* GetLocalParams() override;
-
+  bool HeapAlloc2dArray(unsigned int length, unsigned int stride, cell_t* local_addr,
+                        const cell_t* init) override;
+  void EnterHeapScope() override;
+  void LeaveHeapScope() override;
   bool Invoke(funcid_t fnid, const cell_t* params, unsigned int num_params, cell_t* result);
 
   size_t HeapSize() const {
@@ -95,6 +98,9 @@ class PluginContext : public BasePluginContext
   cell_t* addressOfHp() {
     return &hp_;
   }
+  cell_t* addressOfHpScope() {
+    return &hp_scope_;
+  }
 
   cell_t frm() const {
     return frm_;
@@ -108,6 +114,12 @@ class PluginContext : public BasePluginContext
 
   int popTrackerAndSetHeap();
   int pushTracker(uint32_t amount);
+
+  // Note: this is allowed even in legacy plugins, since the underlying
+  // mechanism doesn't actually require opcode support. The heap code
+  // support bit only indicates that we should *not* use the tracker.
+  bool enterHeapScope();
+  bool leaveHeapScope();
 
   int generateArray(cell_t dims, cell_t* stk, bool autozero);
   int generateFullArray(uint32_t argc, cell_t* argv, int autozero);
@@ -126,10 +138,12 @@ class PluginContext : public BasePluginContext
   bool setCellValue(cell_t address, cell_t value);
   bool heapAlloc(cell_t amount, cell_t* out);
   cell_t* acquireAddrRange(cell_t address, uint32_t bounds);
-  int rebaseArray(cell_t array_addr,
-                  cell_t dat_addr,
-                  cell_t iv_size,
-                  cell_t data_size);
+  bool initArray(cell_t array_addr,
+                 cell_t dat_addr,
+                 cell_t iv_size,
+                 cell_t data_copy_size,
+                 cell_t data_fill_size,
+                 cell_t fill_value);
 
   cell_t* throwIfBadAddress(cell_t addr);
 
@@ -149,6 +163,7 @@ class PluginContext : public BasePluginContext
   cell_t sp_;
   cell_t hp_;
   cell_t frm_;
+  cell_t hp_scope_;
 };
 
 } // namespace sp

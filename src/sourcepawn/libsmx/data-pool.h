@@ -19,11 +19,14 @@
 #ifndef _include_sourcepawn_metadata_datapool_h
 #define _include_sourcepawn_metadata_datapool_h
 
-#include <amtl/am-hashmap.h>
-#include <amtl/am-uniqueptr.h>
-#include <amtl/am-vector.h>
 #include <stdint.h>
 #include <string.h>
+
+#include <memory>
+#include <utility>
+
+#include <amtl/am-hashmap.h>
+#include <amtl/am-vector.h>
 #include "shared/byte-buffer.h"
 
 namespace sp {
@@ -35,7 +38,7 @@ class DataPool
  public:
   DataPool();
 
-  uint32_t add(const Vector<uint8_t>& run);
+  uint32_t add(const std::vector<uint8_t>& run);
 
   const ByteBuffer& buffer() const {
     return buffer_;
@@ -46,10 +49,10 @@ class DataPool
     ByteRun()
     {}
     ByteRun(ByteRun&& other)
-     : bytes(Move(other.bytes)),
+     : bytes(std::move(other.bytes)),
        length(other.length)
     {}
-    UniquePtr<uint8_t[]> bytes;
+    std::unique_ptr<uint8_t[]> bytes;
     size_t length;
   };
   struct BytesAndLength {

@@ -11,11 +11,14 @@
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
 //
 
+#include <stddef.h>
+
+#include <functional>
+#include <utility>
+
 #include <amtl/am-bits.h>
 #include <amtl/am-maybe.h>
-#include <amtl/am-function.h>
 #include <amtl/am-vector.h>
-#include <stddef.h>
 
 namespace sp {
 
@@ -28,13 +31,13 @@ class BitSet
    : max_bits_(ke::Some(max_bits))
   {}
   explicit BitSet(BitSet&& other)
-   : words_(ke::Move(other.words_)),
-     max_bits_(ke::Move(other.max_bits_))
+   : words_(std::move(other.words_)),
+     max_bits_(std::move(other.max_bits_))
   {}
 
   bool test(uintptr_t bit) {
     size_t word = word_for_bit(bit);
-    if (word >= words_.length())
+    if (word >= words_.size())
       return false;
     return !!(words_[word] & (uintptr_t(1) << pos_in_word(bit)));
   }
@@ -42,13 +45,13 @@ class BitSet
   void set(uintptr_t bit) {
     assert(!max_bits_ || bit <= *max_bits_);
     size_t word = word_for_bit(bit);
-    if (word >= words_.length())
+    if (word >= words_.size())
       words_.resize(word + 1);
     words_[word] |= (uintptr_t(1) << pos_in_word(bit));
   }
 
-  void for_each(const ke::Function<void(uintptr_t)>& callback) {
-    for (size_t i = 0; i < words_.length(); i++) {
+  void for_each(const std::function<void(uintptr_t)>& callback) {
+    for (size_t i = 0; i < words_.size(); i++) {
       uintptr_t word = words_[i];
 
       while (word) {
@@ -60,8 +63,8 @@ class BitSet
   }
 
   BitSet& operator =(BitSet&& other) {
-    words_ = ke::Move(other.words_);
-    max_bits_ = ke::Move(other.max_bits_);
+    words_ = std::move(other.words_);
+    max_bits_ = std::move(other.max_bits_);
     return *this;
   }
 
@@ -76,7 +79,7 @@ class BitSet
   }
 
  private:
-  ke::Vector<uintptr_t> words_;
+  std::vector<uintptr_t> words_;
   ke::Maybe<size_t> max_bits_;
 };
 
