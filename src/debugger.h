@@ -21,8 +21,8 @@
 #include "extension.h"
 #endif //_INCLUDE_DEBUGGER_H_
 
-
-class DebugReport : public IDebugListener {
+class DebugReport : public IDebugListener
+{
 public:
 	/**
 	 * @brief Called on debug spew.
@@ -40,6 +40,6 @@ public:
 	 * @param iter      Stack frame iterator.
 	 */
 	void ReportError(const IErrorReport &report, IFrameIterator &iter);
-	
+
 	IDebugListener *original;
 };

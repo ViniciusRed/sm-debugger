@@ -11,16 +11,19 @@ SMEXT_LINK(&g_zr);
 #ifndef _WIN32
 #define GetProcAddress dlsym
 // Linux doesn't have this function so this emulates its functionality
-void *GetModuleHandle(const char *name) {
+void *GetModuleHandle(const char *name)
+{
 #define HMODULE void *
 	void *handle;
-	if (name == nullptr) {
+	if (name == nullptr)
+	{
 		// hmm, how can this be handled under linux....
 		// is it even needed?
 		return nullptr;
 	}
 
-	if ((handle = dlopen(name, RTLD_NOW)) == nullptr) {
+	if ((handle = dlopen(name, RTLD_NOW)) == nullptr)
+	{
 		// printf("Error:%s\n",dlerror());
 		// couldn't open this file
 		return nullptr;
@@ -67,8 +70,9 @@ bool Extension::SDK_OnMetamodLoad(ISmmAPI* ismm, char* error, size_t maxlen, boo
 }
 */
 
-bool Extension::SDK_OnLoad(char *error, size_t maxlen, bool late) {
-	if(late)
+bool Extension::SDK_OnLoad(char *error, size_t maxlen, bool late)
+{
+	if (late)
 	{
 		snprintf(error, maxlen, "Debugger breakpoints works only before any plugins loaded. (create file sm_debugger.autoload in extensions folder)");
 		return false;
@@ -77,25 +81,27 @@ bool Extension::SDK_OnLoad(char *error, size_t maxlen, bool late) {
 	GetSourcePawnFactoryFn factoryFn = nullptr;
 	ISourcePawnEnvironment *current_env = nullptr;
 	std::string modulename = "sourcepawn.jit.x86.";
-	const char* debugPort = g_pSM->GetCoreConfigValue("DebuggerPort");
-	const char* debugDelay = g_pSM->GetCoreConfigValue("DebuggerWaitTime");
-	if(debugPort && debugPort[0])
+	const char *debugPort = g_pSM->GetCoreConfigValue("DebuggerPort");
+	const char *debugDelay = g_pSM->GetCoreConfigValue("DebuggerWaitTime");
+	if (debugPort && debugPort[0])
 	{
 		try
 		{
 			sm_debugger_port = std::stoi(debugPort);
 		}
-		catch (std::invalid_argument& e) {
+		catch (std::invalid_argument &e)
+		{
 			fmt::print("Can't convert DebuggerPort from core.cfg. Invalid argument: [%s]\n", debugPort);
 		}
-		catch (std::out_of_range& e) {
+		catch (std::out_of_range &e)
+		{
 			fmt::print("Can't convert DebuggerPort from core.cfg. unsigned short is out of range! [%s]\n", debugPort);
 		}
-		catch (...) {
+		catch (...)
+		{
 			fmt::print("Can't convert DebuggerPort from core.cfg. unknown problem! [%s]\n", debugPort);
 			// everything else
 		}
-		
 	}
 	else
 	{
@@ -108,35 +114,43 @@ bool Extension::SDK_OnLoad(char *error, size_t maxlen, bool late) {
 		{
 			sm_debugger_delay = std::stof(debugPort);
 		}
-		catch (std::invalid_argument& e) {
+		catch (std::invalid_argument &e)
+		{
 			fmt::print("Can't convert DebuggerWaitTime from core.cfg. Invalid argument: [%s]\n", debugDelay);
 		}
-		catch (std::out_of_range& e) {
+		catch (std::out_of_range &e)
+		{
 			fmt::print("Can't convert DebuggerWaitTime from core.cfg. unsigned short is out of range! [%s]\n", debugDelay);
 		}
-		catch (...) {
+		catch (...)
+		{
 			fmt::print("Can't convert DebuggerWaitTime from core.cfg. unknown problem! [%s]\n", debugDelay);
 			// everything else
 		}
 	}
 	else
 	{
-		fmt::print("[SM_DEBUGGER] DebuggerWaitTime is not exists in core.cfg. Setting default delay 0.\n");		
+		fmt::print("[SM_DEBUGGER] DebuggerWaitTime is not exists in core.cfg. Setting default delay 0.\n");
 	}
 	modulename += PLATFORM_LIB_EXT;
 	auto module = GetModuleHandle(modulename.c_str());
-	if (module) {
+	if (module)
+	{
 		factoryFn = GetSourcePawnFactoryFn(
 			GetProcAddress((HMODULE)module, "GetSourcePawnFactory"));
 	}
-	if (factoryFn) {
+	if (factoryFn)
+	{
 		factory = factoryFn(LOWEST_SOURCEPAWN_API_VERSION);
 	}
-	if (factory) {
+	if (factory)
+	{
 		current_env = factory->CurrentEnvironment();
 	}
-	if (current_env) {
-		if (!Inited) {
+	if (current_env)
+	{
+		if (!Inited)
+		{
 			std::thread(debugThread).detach();
 			Inited = true;
 		}
@@ -156,28 +170,35 @@ void Extension::SDK_OnUnload()
 	std::string modulename = "sourcepawn.jit.x86.";
 	modulename += PLATFORM_LIB_EXT;
 	auto module = GetModuleHandle(modulename.c_str());
-	if (module) {
+	if (module)
+	{
 		factoryFn = GetSourcePawnFactoryFn(
 			GetProcAddress((HMODULE)module, "GetSourcePawnFactory"));
 	}
-	if (factoryFn) {
+	if (factoryFn)
+	{
 		factory = factoryFn(SOURCEPAWN_API_VERSION);
 	}
-	if (factory) {
+	if (factory)
+	{
 		current_env = factory->CurrentEnvironment();
 	}
-	if (current_env) {
+	if (current_env)
+	{
 		current_env->APIv1()->SetDebugListener(DebugListener.original);
 	}
 }
 
-void Extension::SDK_OnAllLoaded() {
+void Extension::SDK_OnAllLoaded()
+{
 }
 
-void Extension::SDK_OnPauseChange(bool paused) {
+void Extension::SDK_OnPauseChange(bool paused)
+{
 }
 
-void Extension::SDK_OnDependenciesDropped() {
+void Extension::SDK_OnDependenciesDropped()
+{
 }
 /*
 bool Extension::RegisterConCommandBase(ConCommandBase* pVar) {
