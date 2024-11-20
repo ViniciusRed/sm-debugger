@@ -77,13 +77,13 @@ class PluginContext : public BasePluginContext
   bool IsInExec() override;
 
   static inline size_t offsetOfSp() {
-    return offsetof(PluginContext, sp_);
+    return reinterpret_cast<char*>(&(reinterpret_cast<PluginContext*>(0)->sp_)) - reinterpret_cast<char*>(0);
   }
   static inline size_t offsetOfRuntime() {
-    return offsetof(PluginContext, m_pRuntime);
+    return reinterpret_cast<char*>(&(reinterpret_cast<PluginContext*>(0)->m_pRuntime)) - reinterpret_cast<char*>(0);
   }
   static inline size_t offsetOfMemory() {
-    return offsetof(PluginContext, memory_);
+    return reinterpret_cast<char*>(&(reinterpret_cast<PluginContext*>(0)->memory_)) - reinterpret_cast<char*>(0);
   }
 
   int32_t* addressOfSp() {
@@ -153,4 +153,5 @@ class PluginContext : public BasePluginContext
 
 } // namespace sp
 
-#endif //_INCLUDE_SOURCEPAWN_V1CONTEXT_H_
+#endif // _INCLUDE_SOURCEPAWN_V1CONTEXT_H_
+

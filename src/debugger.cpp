@@ -204,7 +204,7 @@ public:
 #define MAX_DIMS 3
 #define DISP_MASK 0x0f
 
-	char *get_string(SmxV1Image::Symbol *sym)
+	char *get_string(sp::SmxV1Image::Symbol *sym)
 	{
 		assert(sym->ident() == sp::IDENT_ARRAY ||
 			   sym->ident() == sp::IDENT_REFARRAY);
@@ -227,8 +227,7 @@ public:
 			return nullptr;
 		return str;
 	}
-
-	int get_symbolvalue(const SmxV1Image::Symbol *sym, int index,
+	int get_symbolvalue(const sp::SmxV1Image::Symbol *sym, int index,
 						cell_t *value)
 	{
 
@@ -256,7 +255,6 @@ public:
 			*value = *vptr;
 		return vptr != nullptr;
 	}
-
 	void printvalue(long value, int disptype, std::string &out_value,
 					std::string &out_type)
 	{
@@ -367,11 +365,11 @@ public:
 			}
 			if (str)
 			{
-				addr += strlen(str) + 1;
+				addr += static_cast<uint32_t>(strlen(str) + 1);
 			}
 			if (addr % sizeof(cell_t) != 0)
 			{
-				addr += sizeof(cell_t) - (addr % sizeof(cell_t));
+				addr += static_cast<uint32_t>(sizeof(cell_t) - (addr % sizeof(cell_t)));
 			}
 			json = str ? str : "";
 			break;
@@ -394,9 +392,7 @@ public:
 		{
 			auto fields = current_image->getEnumFields(rtti->index());
 
-			size_t start{};
-
-			start = addr;
+			uint32_t start = addr;
 
 			for (auto &field : fields)
 			{
@@ -414,12 +410,11 @@ public:
 		{
 			auto fields = current_image->getTypeFields(rtti->index());
 			cell_t *ptr;
-			size_t field_offset{};
-			field_offset = addr;
+			uint32_t field_offset = addr;
 
 			for (auto &field : fields)
 			{
-				size_t start = field_offset;
+				uint32_t start = field_offset;
 
 				auto name = current_image->GetDebugName(field->name);
 				auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
@@ -432,6 +427,7 @@ public:
 
 		return json;
 	}
+
 	variable_s display_variable(SmxV1Image::Symbol *sym, uint32_t index[],
 								int idxlevel, bool noarray = false)
 	{
@@ -450,7 +446,7 @@ public:
 		auto rtti = sym->rtti();
 		if (rtti && rtti->type_id)
 		{
-			size_t base = rtti->address;
+			uint32_t base = static_cast<uint32_t>(rtti->address);
 			if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
 				base += frm_;							  // addresses of local vars are relative to the frame
 
@@ -482,11 +478,13 @@ public:
 			const char *tagname = current_image->GetTagName(sym->tagid());
 			if (tagname != nullptr)
 			{
-				if (!stricmp(tagname, "bool"))
+
+				if (strcasecmp(tagname, "bool") == 0)
 				{
 					sym->setVClass(sym->vclass() | DISP_BOOL);
 				}
-				else if (!stricmp(tagname, "float"))
+
+				else if (strcasecmp(tagname, "float") == 0)
 				{
 					sym->setVClass(sym->vclass() | DISP_FLOAT);
 				}
@@ -637,7 +635,6 @@ public:
 		}
 		return var;
 	}
-
 	void evaluateVar(int frame_id, char *variable)
 	{
 		if (current_state != DebugRun)
