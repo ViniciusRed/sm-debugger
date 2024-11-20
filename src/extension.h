@@ -3,9 +3,10 @@
 #define _EXTENSION_H_
 
 #include "smsdk_ext.h"
-//#include <convar.h>
+// #include <convar.h>
 
-class Extension : public SDKExtension {
+class Extension : public SDKExtension
+{
 public:
 	virtual bool SDK_OnLoad(char *error, size_t maxlen, bool late);
 	virtual void SDK_OnUnload();

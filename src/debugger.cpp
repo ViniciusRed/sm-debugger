@@ -39,14 +39,15 @@ using namespace brynet::net::http;
 //  Lowercases string
 //
 template <typename T>
-std::basic_string<T> lowercase(const std::basic_string<T>& s)
+std::basic_string<T> lowercase(const std::basic_string<T> &s)
 {
 	std::basic_string<T> s2 = s;
 	std::transform(s2.begin(), s2.end(), s2.begin(), tolower);
 	return std::move(s2);
 }
 
-enum DebugState {
+enum DebugState
+{
 	DebugDead = -1,
 	DebugRun = 0,
 	DebugBreakpoint,
@@ -56,7 +57,8 @@ enum DebugState {
 	DebugStepOut,
 	DebugException
 };
-enum MessageType {
+enum MessageType
+{
 	Diagnostics = 0,
 	RequestFile,
 	File,
@@ -91,13 +93,15 @@ enum MessageType {
 	TotalMessages
 };
 
-std::vector<std::string> split_string(const std::string& str,
-	const std::string& delimiter) {
+std::vector<std::string> split_string(const std::string &str,
+									  const std::string &delimiter)
+{
 	std::vector<std::string> strings;
 
 	std::string::size_type pos = 0;
 	std::string::size_type prev = 0;
-	while ((pos = str.find(delimiter, prev)) != std::string::npos) {
+	while ((pos = str.find(delimiter, prev)) != std::string::npos)
+	{
 		strings.push_back(str.substr(prev, pos - prev));
 		prev = pos + 1;
 	}
@@ -108,26 +112,30 @@ std::vector<std::string> split_string(const std::string& str,
 	return strings;
 }
 DebugReport DebugListener;
-void removeClientID(const TcpConnection::Ptr& session);
-class DebuggerClient {
+void removeClientID(const TcpConnection::Ptr &session);
+class DebuggerClient
+{
 public:
 	TcpConnection::Ptr socket;
-	std::unordered_set <std::string> files;
+	std::unordered_set<std::string> files;
 	int DebugState = 0;
 
-	struct variable_s {
+	struct variable_s
+	{
 		std::string name;
 		std::string value;
 		std::string type;
 	};
 
-	struct call_stack_s {
+	struct call_stack_s
+	{
 		uint32_t line;
 		std::string name;
 		std::string filename;
 	};
 
-	struct breakpoint_s {
+	struct breakpoint_s
+	{
 		long line;
 		std::string filename;
 	};
@@ -137,7 +145,7 @@ public:
 	bool receive_walk_cmd = false;
 	std::mutex mtx;
 	std::condition_variable cv;
-	SourcePawn::IPluginContext* context_;
+	SourcePawn::IPluginContext *context_;
 	uint32_t current_line;
 	std::unordered_map<std::string, std::unordered_set<long>> break_list;
 	int current_state = 0;
@@ -146,12 +154,14 @@ public:
 	cell_t frm_;
 	std::map<std::string, std::shared_ptr<SmxV1Image>> images;
 	std::shared_ptr<SmxV1Image> current_image = nullptr;
-	SourcePawn::IFrameIterator* debug_iter;
-	DebuggerClient(const TcpConnection::Ptr& tcp_connection)
-		: socket(tcp_connection) {
+	SourcePawn::IFrameIterator *debug_iter;
+	DebuggerClient(const TcpConnection::Ptr &tcp_connection)
+		: socket(tcp_connection)
+	{
 	}
 
-	~DebuggerClient() {
+	~DebuggerClient()
+	{
 		stopDebugging();
 		fmt::print("Debugger disabled.\n");
 	}
@@ -159,25 +169,30 @@ public:
 	class debugger_stopped : public std::exception
 	{
 		std::string what_message;
+
 	public:
-		const char* what() const throw ()
+		const char *what() const throw()
 		{
 			return "Debugger exited!";
 		}
 	};
 
-	void setBreakpoint(std::string path, int line, int id) {
+	void setBreakpoint(std::string path, int line, int id)
+	{
 		break_list[path].insert(line);
 	}
 
-	void clearBreakpoints(std::string fileName) {
+	void clearBreakpoints(std::string fileName)
+	{
 		auto found = break_list.find(fileName);
-		if (found != break_list.end()) {
+		if (found != break_list.end())
+		{
 			found->second.clear();
 		}
 	}
 
-	enum {
+	enum
+	{
 		DISP_DEFAULT = 0x10,
 		DISP_STRING = 0x20,
 		DISP_BIN = 0x30, /* ??? not implemented */
@@ -189,39 +204,43 @@ public:
 #define MAX_DIMS 3
 #define DISP_MASK 0x0f
 
-	char* get_string(SmxV1Image::Symbol* sym) {
+	char *get_string(SmxV1Image::Symbol *sym)
+	{
 		assert(sym->ident() == sp::IDENT_ARRAY ||
-			sym->ident() == sp::IDENT_REFARRAY);
+			   sym->ident() == sp::IDENT_REFARRAY);
 		assert(sym->dimcount() == 1);
 
 		// get the starting address and the length of the string
-		cell_t* addr;
+		cell_t *addr;
 		cell_t base = sym->addr();
 		if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
-			base += frm_; // addresses of local vars are relative to the frame
-		if (sym->ident() == sp::IDENT_REFARRAY) {
+			base += frm_;							  // addresses of local vars are relative to the frame
+		if (sym->ident() == sp::IDENT_REFARRAY)
+		{
 			context_->LocalToPhysAddr(base, &addr);
 			assert(addr != nullptr);
 			base = *addr;
 		}
 
-		char* str;
+		char *str;
 		if (context_->LocalToStringNULL(base, &str) != SP_ERROR_NONE)
 			return nullptr;
 		return str;
 	}
 
-	int get_symbolvalue(const SmxV1Image::Symbol* sym, int index,
-		cell_t* value) {
+	int get_symbolvalue(const SmxV1Image::Symbol *sym, int index,
+						cell_t *value)
+	{
 
-		cell_t* vptr;
+		cell_t *vptr;
 		cell_t base = sym->addr();
 		if (sym->vclass() & DISP_MASK)
 			base += frm_; // addresses of local vars are relative to the frame
 
 		// a reference
 		if (sym->ident() == sp::IDENT_REFERENCE ||
-			sym->ident() == sp::IDENT_REFARRAY) {
+			sym->ident() == sp::IDENT_REFARRAY)
+		{
 			if (context_->LocalToPhysAddr(base, &vptr) != SP_ERROR_NONE)
 				return false;
 
@@ -238,14 +257,17 @@ public:
 		return vptr != nullptr;
 	}
 
-	void printvalue(long value, int disptype, std::string& out_value,
-		std::string& out_type) {
+	void printvalue(long value, int disptype, std::string &out_value,
+					std::string &out_type)
+	{
 		char out[64];
-		if (disptype == DISP_FLOAT) {
+		if (disptype == DISP_FLOAT)
+		{
 			out_type = "float";
 			sprintf(out, "%f", sp_ctof(value));
 		}
-		else if (disptype == DISP_FIXED) {
+		else if (disptype == DISP_FIXED)
+		{
 			out_type = "fixed";
 #define MULTIPLIER 1000
 			long ipart = value / MULTIPLIER;
@@ -254,13 +276,16 @@ public:
 				value = -value;
 			sprintf(out, "%ld.%03ld", ipart, value);
 		}
-		else if (disptype == DISP_HEX) {
+		else if (disptype == DISP_HEX)
+		{
 			out_type = "hex";
 			sprintf(out, "%lx", value);
 		}
-		else if (disptype == DISP_BOOL) {
+		else if (disptype == DISP_BOOL)
+		{
 			out_type = "bool";
-			switch (value) {
+			switch (value)
+			{
 			case 0:
 				sprintf(out, "false");
 				break;
@@ -272,20 +297,21 @@ public:
 				break;
 			} /* switch */
 		}
-		else {
+		else
+		{
 			out_type = "cell";
 			sprintf(out, "%ld", value);
 		} /* if */
 		out_value += out;
 	}
-	nlohmann::json read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti, bool is_ref = false)
+	nlohmann::json read_variable(uint32_t &addr, uint32_t type_id, debug::Rtti *rtti, bool is_ref = false)
 	{
 		nlohmann::json json;
 		if (!rtti)
 		{
-			rtti = const_cast<debug::Rtti*>(current_image->rtti_data()->typeFromTypeId(type_id));
+			rtti = const_cast<debug::Rtti *>(current_image->rtti_data()->typeFromTypeId(type_id));
 		}
-		cell_t* ptr;
+		cell_t *ptr;
 		switch (rtti->type())
 		{
 		case cb::kAny:
@@ -317,7 +343,7 @@ public:
 			{
 				if (rtti->inner()->type() == cb::kChar8)
 				{
-					json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
+					json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti *>(rtti->inner()), false);
 				}
 				else
 				{
@@ -325,9 +351,8 @@ public:
 					{
 						auto start = addr;
 
-						json[i] = read_variable(start, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
+						json[i] = read_variable(start, rtti->inner()->type(), const_cast<debug::Rtti *>(rtti->inner()), false);
 						addr += 4;
-
 					}
 				}
 			}
@@ -335,7 +360,7 @@ public:
 		}
 		case cb::kChar8:
 		{
-			char* str = nullptr;
+			char *str = nullptr;
 			if (context_->LocalToStringNULL(addr, &str) != SP_ERROR_NONE)
 			{
 				break;
@@ -355,13 +380,13 @@ public:
 		{
 			if (is_ref)
 			{
-				cell_t* a;
+				cell_t *a;
 				context_->LocalToPhysAddr(addr, &a);
 				addr = *a;
 			}
 			if (rtti->inner())
 			{
-				json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()));
+				json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti *>(rtti->inner()));
 			}
 			break;
 		}
@@ -373,7 +398,7 @@ public:
 
 			start = addr;
 
-			for (auto& field : fields)
+			for (auto &field : fields)
 			{
 				auto name = current_image->GetDebugName(field->name);
 				auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
@@ -381,24 +406,24 @@ public:
 				{
 					break;
 				}
-				json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field);
+				json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti *)rtti_field);
 			}
 			break;
 		}
 		case cb::kClassdef:
 		{
 			auto fields = current_image->getTypeFields(rtti->index());
-			cell_t* ptr;
+			cell_t *ptr;
 			size_t field_offset{};
 			field_offset = addr;
 
-			for (auto& field : fields)
+			for (auto &field : fields)
 			{
 				size_t start = field_offset;
 
 				auto name = current_image->GetDebugName(field->name);
 				auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
-				json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field, true);
+				json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti *)rtti_field, true);
 				field_offset += sizeof(cell_t);
 			}
 			break;
@@ -407,25 +432,27 @@ public:
 
 		return json;
 	}
-	variable_s display_variable(SmxV1Image::Symbol* sym, uint32_t index[],
-		int idxlevel, bool noarray = false) {
+	variable_s display_variable(SmxV1Image::Symbol *sym, uint32_t index[],
+								int idxlevel, bool noarray = false)
+	{
 		nlohmann::json json;
 		variable_s var;
 		var.name = "N/A";
-		if (current_image->GetDebugName(sym->name()) != nullptr) {
+		if (current_image->GetDebugName(sym->name()) != nullptr)
+		{
 			var.name = current_image->GetDebugName(sym->name());
 		};
 		var.type = "N/A";
 		var.value = "";
 		cell_t value;
-		std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> symdims;
+		std::unique_ptr<std::vector<SmxV1Image::ArrayDim *>> symdims;
 		assert(index != NULL);
 		auto rtti = sym->rtti();
 		if (rtti && rtti->type_id)
 		{
 			size_t base = rtti->address;
 			if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
-				base += frm_; // addresses of local vars are relative to the frame
+				base += frm_;							  // addresses of local vars are relative to the frame
 
 			try
 			{
@@ -436,42 +463,50 @@ public:
 					return var;
 				}
 			}
-			catch(...)
+			catch (...)
 			{
 				// skip rtti parse
 			}
 		}
 		// first check whether the variable is visible at all
 		if ((uint32_t)cip_ < sym->codestart() ||
-			(uint32_t)cip_ > sym->codeend()) {
+			(uint32_t)cip_ > sym->codeend())
+		{
 			var.value = "Not in scope.";
 			return var;
 		}
 
 		// set default display type for the symbol (if none was set)
-		if ((sym->vclass() & ~DISP_MASK) == 0) {
-			const char* tagname = current_image->GetTagName(sym->tagid());
-			if (tagname != nullptr) {
-				if (!stricmp(tagname, "bool")) {
+		if ((sym->vclass() & ~DISP_MASK) == 0)
+		{
+			const char *tagname = current_image->GetTagName(sym->tagid());
+			if (tagname != nullptr)
+			{
+				if (!stricmp(tagname, "bool"))
+				{
 					sym->setVClass(sym->vclass() | DISP_BOOL);
 				}
-				else if (!stricmp(tagname, "float")) {
+				else if (!stricmp(tagname, "float"))
+				{
 					sym->setVClass(sym->vclass() | DISP_FLOAT);
 				}
 			}
 			if ((sym->vclass() & ~DISP_MASK) == 0 &&
 				(sym->ident() == sp::IDENT_ARRAY ||
-					sym->ident() == sp::IDENT_REFARRAY) &&
-				sym->dimcount() == 1) {
+				 sym->ident() == sp::IDENT_REFARRAY) &&
+				sym->dimcount() == 1)
+			{
 				/* untagged array with a single dimension, walk through all
 				 * elements and check whether this could be a string
 				 */
-				char* ptr = get_string(sym);
-				if (ptr != nullptr) {
+				char *ptr = get_string(sym);
+				if (ptr != nullptr)
+				{
 					uint32_t i;
-					for (i = 0; ptr[i] != '\0'; i++) {
+					for (i = 0; ptr[i] != '\0'; i++)
+					{
 						if ((ptr[i] < ' ' && ptr[i] != '\n' && ptr[i] != '\r' &&
-							ptr[i] != '\t'))
+							 ptr[i] != '\t'))
 							break; // non-ASCII character
 						if (i == 0 && !isalpha(ptr[i]))
 							break; // want a letter at the start
@@ -483,17 +518,20 @@ public:
 		}
 
 		if (sym->ident() == sp::IDENT_ARRAY ||
-			sym->ident() == sp::IDENT_REFARRAY) {
+			sym->ident() == sp::IDENT_REFARRAY)
+		{
 			int dim;
-			symdims = std::make_unique< std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
+			symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim *>>(*current_image->GetArrayDimensions(sym));
 			// check whether any of the indices are out of range
 			assert(symdims != nullptr);
-			for (dim = 0; dim < idxlevel; dim++) {
+			for (dim = 0; dim < idxlevel; dim++)
+			{
 				if (symdims->at(dim)->size() > 0 &&
 					index[dim] >= symdims->at(dim)->size())
 					break;
 			}
-			if (dim < idxlevel) {
+			if (dim < idxlevel)
+			{
 
 				var.value = "(index out of range)";
 				return var;
@@ -502,12 +540,14 @@ public:
 
 		// Print first dimension of array
 		if ((sym->ident() == sp::IDENT_ARRAY ||
-			sym->ident() == sp::IDENT_REFARRAY) &&
-			idxlevel == 0) {
+			 sym->ident() == sp::IDENT_REFARRAY) &&
+			idxlevel == 0)
+		{
 			// Print string
-			if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
+			if ((sym->vclass() & ~DISP_MASK) == DISP_STRING)
+			{
 				var.type = "String";
-				char* str = get_string(sym);
+				char *str = get_string(sym);
 				if (str != nullptr)
 				{
 					var.value = str;
@@ -516,7 +556,8 @@ public:
 					var.value = "NULL_STRING";
 			}
 			// Print one-dimensional array
-			else if (sym->dimcount() == 1) {
+			else if (sym->dimcount() == 1)
+			{
 
 				if (!noarray)
 					var.type = "Array";
@@ -536,10 +577,12 @@ public:
 				{
 					json = std::vector<cell_t>();
 				}
-				for (i = 0; i < len; i++) {
+				for (i = 0; i < len; i++)
+				{
 					if (get_symbolvalue(sym, i, &value))
 					{
-						if (type == DISP_FLOAT) {
+						if (type == DISP_FLOAT)
+						{
 							json.push_back(sp_ctof(value));
 						}
 						else if (type == DISP_BOOL)
@@ -555,22 +598,26 @@ public:
 				var.value = json.dump(4).c_str();
 			}
 			// Not supported..
-			else {
+			else
+			{
 				var.value = "(multi-dimensional array)";
 			}
 		}
 		else if (sym->ident() != sp::IDENT_ARRAY &&
-			sym->ident() != sp::IDENT_REFARRAY && idxlevel > 0) {
+				 sym->ident() != sp::IDENT_REFARRAY && idxlevel > 0)
+		{
 			// index used on a non-array
 			var.value = "(invalid index, not an array)";
 		}
-		else {
+		else
+		{
 			// simple variable, or indexed array element
 			assert(idxlevel > 0 ||
-				index[0] == 0); // index should be zero if non-array
+				   index[0] == 0); // index should be zero if non-array
 			int dim;
 			int base = 0;
-			for (dim = 0; dim < idxlevel - 1; dim++) {
+			for (dim = 0; dim < idxlevel - 1; dim++)
+			{
 				if (!noarray)
 					var.type = "Array";
 				base += index[dim];
@@ -582,7 +629,7 @@ public:
 			if (get_symbolvalue(sym, base + index[dim], &value) &&
 				sym->dimcount() == idxlevel)
 				printvalue(value, (sym->vclass() & ~DISP_MASK), var.value,
-					var.type);
+						   var.type);
 			else if (sym->dimcount() != idxlevel)
 				var.value = "(invalid number of dimensions)";
 			else
@@ -591,12 +638,15 @@ public:
 		return var;
 	}
 
-	void evaluateVar(int frame_id, char* variable) {
-		if (current_state != DebugRun) {
+	void evaluateVar(int frame_id, char *variable)
+	{
+		if (current_state != DebugRun)
+		{
 			auto imagev1 = current_image.get();
 
 			std::unique_ptr<SmxV1Image::Symbol> sym;
-			if (imagev1->GetVariable(variable, cip_, sym)) {
+			if (imagev1->GetVariable(variable, cip_, sym))
+			{
 				uint32_t idx[MAX_DIMS], dim;
 				dim = 0;
 				memset(idx, 0, sizeof idx);
@@ -614,23 +664,25 @@ public:
 					buffer.PutString(var.type.c_str());
 					buffer.PutInt(0);
 				}
-				*(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-				socket->send(static_cast<const char*>(buffer.Base()),
-					static_cast<size_t>(buffer.TellPut()));
+				*(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
+				socket->send(static_cast<const char *>(buffer.Base()),
+							 static_cast<size_t>(buffer.TellPut()));
 			}
 		}
 	}
 
-	int set_symbolvalue(const SmxV1Image::Symbol* sym, int index,
-		cell_t value) {
-		cell_t* vptr;
+	int set_symbolvalue(const SmxV1Image::Symbol *sym, int index,
+						cell_t value)
+	{
+		cell_t *vptr;
 		cell_t base = sym->addr();
 		if (sym->vclass() & DISP_MASK)
 			base += frm_; // addresses of local vars are relative to the frame
 
 		// a reference
 		if (sym->ident() == sp::IDENT_REFERENCE ||
-			sym->ident() == sp::IDENT_REFARRAY) {
+			sym->ident() == sp::IDENT_REFARRAY)
+		{
 			context_->LocalToPhysAddr(base, &vptr);
 			assert(vptr != nullptr);
 			base = *vptr;
@@ -642,76 +694,92 @@ public:
 		return true;
 	}
 
-	bool SetSymbolString(const SmxV1Image::Symbol* sym, char* str) {
+	bool SetSymbolString(const SmxV1Image::Symbol *sym, char *str)
+	{
 		assert(sym->ident() == sp::IDENT_ARRAY ||
-			sym->ident() == sp::IDENT_REFARRAY);
+			   sym->ident() == sp::IDENT_REFARRAY);
 		assert(sym->dimcount() == 1);
 
-		cell_t* vptr;
+		cell_t *vptr;
 		cell_t base = sym->addr();
 		if (sym->vclass() & DISP_MASK)
 			base += frm_; // addresses of local vars are relative to the frame
 
 		// a reference
 		if (sym->ident() == sp::IDENT_REFERENCE ||
-			sym->ident() == sp::IDENT_REFARRAY) {
+			sym->ident() == sp::IDENT_REFARRAY)
+		{
 			context_->LocalToPhysAddr(base, &vptr);
 			assert(vptr != nullptr);
 			base = *vptr;
 		}
 
-		std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> dims;
-		dims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
+		std::unique_ptr<std::vector<SmxV1Image::ArrayDim *>> dims;
+		dims = std::make_unique<std::vector<SmxV1Image::ArrayDim *>>(*current_image->GetArrayDimensions(sym));
 		return context_->StringToLocalUTF8(base, dims->at(0)->size(), str,
-			NULL) == SP_ERROR_NONE;
+										   NULL) == SP_ERROR_NONE;
 	}
 
-	void setVariable(std::string var, std::string value, int index) {
+	void setVariable(std::string var, std::string value, int index)
+	{
 		bool success = false;
 		bool valid_value = true;
-		if (current_state != DebugRun) {
+		if (current_state != DebugRun)
+		{
 			auto imagev1 = current_image.get();
 			std::unique_ptr<SmxV1Image::Symbol> sym;
 			cell_t result = 0;
 			value.erase(remove(value.begin(), value.end(), '\"'), value.end());
-			if (imagev1->GetVariable(var.c_str(), cip_, sym)) {
+			if (imagev1->GetVariable(var.c_str(), cip_, sym))
+			{
 
 				if ((sym->ident() == IDENT_ARRAY ||
-					sym->ident() == IDENT_REFARRAY)) {
-					if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
+					 sym->ident() == IDENT_REFARRAY))
+				{
+					if ((sym->vclass() & ~DISP_MASK) == DISP_STRING)
+					{
 
-						SetSymbolString(sym.get(), const_cast<char*>(value.c_str()));
+						SetSymbolString(sym.get(), const_cast<char *>(value.c_str()));
 					}
 					valid_value = false;
 				}
-				else {
+				else
+				{
 					size_t lastChar;
-					try {
+					try
+					{
 						int intvalue = std::stoi(value, &lastChar);
-						if (lastChar == value.size()) {
+						if (lastChar == value.size())
+						{
 							result = intvalue;
 						}
-						else {
+						else
+						{
 							auto val = std::stof(value, &lastChar);
 							result = sp_ftoc(val);
 						}
 					}
-					catch (...) {
+					catch (...)
+					{
 						// ??? some text or bool
-						if (value == "true") {
+						if (value == "true")
+						{
 							result = 1;
 						}
-						else if (value == "false") {
+						else if (value == "false")
+						{
 							result = 0;
 						}
-						else {
+						else
+						{
 							valid_value = false;
 						}
 					}
 				}
 
 				if (valid_value &&
-					(imagev1->GetVariable(var.c_str(), cip_, sym))) {
+					(imagev1->GetVariable(var.c_str(), cip_, sym)))
+				{
 					success = set_symbolvalue(sym.get(), index, (cell_t)result);
 				}
 			}
@@ -722,55 +790,69 @@ public:
 			buffer.PutChar(MessageType::SetVariable);
 			buffer.PutInt(success);
 		}
-		*(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-		socket->send(static_cast<const char*>(buffer.Base()),
-			static_cast<size_t>(buffer.TellPut()));
+		*(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
+		socket->send(static_cast<const char *>(buffer.Base()),
+					 static_cast<size_t>(buffer.TellPut()));
 	}
 
-	void sendVariables(char* scope) {
+	void sendVariables(char *scope)
+	{
 		bool local_scope = strstr(scope, ":%local%");
 		bool global_scope = strstr(scope, ":%global%");
-		if (current_state != DebugRun) {
+		if (current_state != DebugRun)
+		{
 			auto imagev1 = current_image.get();
 
 			std::unique_ptr<SmxV1Image::Symbol> sym;
-			if (current_image && imagev1) {
+			if (current_image && imagev1)
+			{
 #define sDIMEN_MAX 4
 				uint32_t idx[sDIMEN_MAX], dim;
 				dim = 0;
 				memset(idx, 0, sizeof idx);
 				std::vector<variable_s> vars;
-				if (local_scope || global_scope) {
+				if (local_scope || global_scope)
+				{
 					SmxV1Image::SymbolIterator iter = imagev1->symboliterator(global_scope);
-					while (!iter.Done()) {
+					while (!iter.Done())
+					{
 						const auto sym = iter.Next();
 
 						// Only variables in scope.
 						if (sym->ident() != sp::IDENT_FUNCTION &&
-							(sym->codestart() <= (uint32_t)cip_ &&
-								sym->codeend() >= (uint32_t)cip_) || global_scope) {
+								(sym->codestart() <= (uint32_t)cip_ &&
+								 sym->codeend() >= (uint32_t)cip_) ||
+							global_scope)
+						{
 							auto var = display_variable(sym, idx, dim);
-							if (local_scope) {
-								if ((sym->vclass() & DISP_MASK) > 0) {
+							if (local_scope)
+							{
+								if ((sym->vclass() & DISP_MASK) > 0)
+								{
 									vars.push_back(var);
 								}
 							}
-							else {
-								if (!((sym->vclass() & DISP_MASK) > 0)) {
+							else
+							{
+								if (!((sym->vclass() & DISP_MASK) > 0))
+								{
 									vars.push_back(var);
 								}
 							}
 						}
 					}
 				}
-				else {
-					if (imagev1->GetVariable(scope, cip_, sym)) {
+				else
+				{
+					if (imagev1->GetVariable(scope, cip_, sym))
+					{
 						auto var = display_variable(sym.get(), idx, dim, true);
 						std::string var_name = scope;
 						auto values = split_string(var.value, ",");
 						int i = 0;
-						for (auto val : values) {
-							vars.push_back({ std::to_string(i), val, var.type });
+						for (auto val : values)
+						{
+							vars.push_back({std::to_string(i), val, var.type});
 							i++;
 						}
 					}
@@ -781,7 +863,8 @@ public:
 				buffer.PutInt(strlen(scope) + 1);
 				buffer.PutString(scope);
 				buffer.PutInt(vars.size());
-				for (auto var : vars) {
+				for (auto var : vars)
+				{
 					buffer.PutInt(var.name.size() + 1);
 					buffer.PutString(var.name.c_str());
 					buffer.PutInt(var.value.size() + 1);
@@ -791,58 +874,70 @@ public:
 					buffer.PutString(var.type.c_str());
 					buffer.PutInt(0);
 				}
-				*(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-				socket->send(static_cast<const char*>(buffer.Base()),
-					static_cast<size_t>(buffer.TellPut()));
+				*(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
+				socket->send(static_cast<const char *>(buffer.Base()),
+							 static_cast<size_t>(buffer.TellPut()));
 			}
 		}
 	}
 
-	void CallStack() {
+	void CallStack()
+	{
 		std::vector<call_stack_s> callStack;
-		if (current_state == DebugException) {
-			if (debug_iter) {
+		if (current_state == DebugException)
+		{
+			if (debug_iter)
+			{
 				uint32_t index = 0;
-				for (; !debug_iter->Done(); debug_iter->Next(), index++) {
+				for (; !debug_iter->Done(); debug_iter->Next(), index++)
+				{
 
-					if (debug_iter->IsNativeFrame()) {
-						callStack.push_back({ 0,
+					if (debug_iter->IsNativeFrame())
+					{
+						callStack.push_back({0,
 											 debug_iter->FunctionName(),
-											 "native" });
+											 "native"});
 					}
-					else if (debug_iter->IsScriptedFrame()) {
+					else if (debug_iter->IsScriptedFrame())
+					{
 						auto current_file = std::filesystem::path(debug_iter->FilePath()).filename().string();
 						lowercase(current_file);
-						callStack.push_back({ debug_iter->LineNumber() - 1,
+						callStack.push_back({debug_iter->LineNumber() - 1,
 											 debug_iter->FunctionName(),
-											 current_file });
+											 current_file});
 					}
 				}
 			}
 			current_state = DebugBreakpoint;
 		}
-		else if (current_state != DebugRun) {
+		else if (current_state != DebugRun)
+		{
 
-			IFrameIterator* iter = context_->CreateFrameIterator();
+			IFrameIterator *iter = context_->CreateFrameIterator();
 
 			uint32_t index = 0;
-			for (; !iter->Done(); iter->Next(), index++) {
+			for (; !iter->Done(); iter->Next(), index++)
+			{
 
-				if (iter->IsNativeFrame()) {
-					callStack.push_back({ 0,
+				if (iter->IsNativeFrame())
+				{
+					callStack.push_back({0,
 										 iter->FunctionName(),
-										 "" });
+										 ""});
 				}
-				else if (iter->IsScriptedFrame()) {
+				else if (iter->IsScriptedFrame())
+				{
 					std::string current_file = iter->FilePath();
-					for (auto file : files) {
-						if (file.find(current_file) != std::string::npos) {
+					for (auto file : files)
+					{
+						if (file.find(current_file) != std::string::npos)
+						{
 							current_file = file;
 							break;
 						}
 					}
-					callStack.push_back({ iter->LineNumber() - 1,
-										 iter->FunctionName(), current_file });
+					callStack.push_back({iter->LineNumber() - 1,
+										 iter->FunctionName(), current_file});
 				}
 			}
 			context_->DestroyFrameIterator(iter);
@@ -853,7 +948,8 @@ public:
 		{
 			buffer.PutChar(MessageType::CallStack);
 			buffer.PutInt(callStack.size());
-			for (auto stack : callStack) {
+			for (auto stack : callStack)
+			{
 				buffer.PutInt(stack.name.size() + 1);
 				buffer.PutString(stack.name.c_str());
 				buffer.PutInt(stack.filename.size() + 1);
@@ -861,14 +957,16 @@ public:
 				buffer.PutInt(stack.line + 1);
 			}
 		}
-		*(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-		socket->send(static_cast<const char*>(buffer.Base()),
-			static_cast<size_t>(buffer.TellPut()));
+		*(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
+		socket->send(static_cast<const char *>(buffer.Base()),
+					 static_cast<size_t>(buffer.TellPut()));
 	}
 
 	void WaitWalkCmd(std::string reason = "Breakpoint",
-		std::string text = "N/A") {
-		if (!receive_walk_cmd) {
+					 std::string text = "N/A")
+	{
+		if (!receive_walk_cmd)
+		{
 			CUtlBuffer buffer;
 			{
 				buffer.PutUnsignedInt(0);
@@ -881,39 +979,44 @@ public:
 					buffer.PutInt(text.size() + 1);
 					buffer.PutString(text.c_str());
 				}
-				*(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
+				*(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
 			}
-			socket->send(static_cast<const char*>(buffer.Base()),
-				static_cast<size_t>(buffer.TellPut()));
+			socket->send(static_cast<const char *>(buffer.Base()),
+						 static_cast<size_t>(buffer.TellPut()));
 			std::unique_lock<std::mutex> lck(mtx);
-			cv.wait(lck, [this] { return receive_walk_cmd; });
+			cv.wait(lck, [this]
+					{ return receive_walk_cmd; });
 		}
-		if(current_state == DebugDead)
+		if (current_state == DebugDead)
 		{
 			unload = true;
 			throw debugger_stopped();
 		}
 	}
 
-	void ReportError(const IErrorReport& report, IFrameIterator& iter) {
+	void ReportError(const IErrorReport &report, IFrameIterator &iter)
+	{
 		receive_walk_cmd = false;
 		current_state = DebugException;
 		context_ = iter.Context();
 		debug_iter = &iter;
 		WaitWalkCmd("exception", report.Message());
 	}
-	int(DebugHook)(SourcePawn::IPluginContext* ctx,
-		sp_debug_break_info_t& BreakInfo) {
+	int(DebugHook)(SourcePawn::IPluginContext *ctx,
+				   sp_debug_break_info_t &BreakInfo)
+	{
 		std::string filename = ctx->GetRuntime()->GetFilename();
 		auto image = images.find(filename);
-		if (image == images.end()) {
-			FILE* fp = fopen(filename.c_str(), "rb");
+		if (image == images.end())
+		{
+			FILE *fp = fopen(filename.c_str(), "rb");
 			current_image = std::make_shared<SmxV1Image>(fp);
 			current_image->validate();
-			images.insert({ filename, current_image });
+			images.insert({filename, current_image});
 			fclose(fp);
 		}
-		else {
+		else
+		{
 			current_image = image->second;
 		}
 		context_ = ctx;
@@ -926,21 +1029,26 @@ public:
 		frm_ = BreakInfo.frm;
 		receive_walk_cmd = false;
 
-		IFrameIterator* iter = context_->CreateFrameIterator();
+		IFrameIterator *iter = context_->CreateFrameIterator();
 		std::string current_file = "N/A";
 		uint32_t index = 0;
-		for (; !iter->Done(); iter->Next(), index++) {
+		for (; !iter->Done(); iter->Next(), index++)
+		{
 
-			if (iter->IsNativeFrame()) {
+			if (iter->IsNativeFrame())
+			{
 				continue;
 			}
 
-			if (iter->IsScriptedFrame()) {
+			if (iter->IsScriptedFrame())
+			{
 				current_file = std::filesystem::path(iter->FilePath()).filename().string();
 				lowercase(current_file);
 
-				for (auto file : files) {
-					if (file.find(current_file) != std::string::npos) {
+				for (auto file : files)
+				{
+					if (file.find(current_file) != std::string::npos)
+					{
 						current_file = file;
 						break;
 					}
@@ -963,13 +1071,16 @@ public:
 		if (current_state == DebugStepOut && frm_ > lastfrm_)
 			current_state = DebugStepIn;
 
-		if (current_state == DebugPause || current_state == DebugStepIn) {
+		if (current_state == DebugPause || current_state == DebugStepIn)
+		{
 			WaitWalkCmd();
 		}
-		else {
+		else
+		{
 
 			auto found = break_list.find(current_file);
-			if (found != break_list.end()) {
+			if (found != break_list.end())
+			{
 				if (found->second.find(current_line) != found->second.end())
 				{
 					current_state = DebugBreakpoint;
@@ -979,12 +1090,13 @@ public:
 		}
 
 		/* check whether we are stepping through a sub-function */
-		if (current_state == DebugStepOver) {
+		if (current_state == DebugStepOver)
+		{
 			if (frm_ < lastfrm_)
 			{
 				return current_state;
 			}
-			
+
 			WaitWalkCmd();
 
 			if (current_state == DebugDead)
@@ -996,16 +1108,19 @@ public:
 		return current_state;
 	}
 
-	void SwitchState(unsigned char state) {
+	void SwitchState(unsigned char state)
+	{
 		current_state = state;
 		receive_walk_cmd = true;
 		cv.notify_one();
 	}
 
-	void AskFile() {
+	void AskFile()
+	{
 	}
 
-	void RecvDebugFile(CUtlBuffer* buf) {
+	void RecvDebugFile(CUtlBuffer *buf)
+	{
 		char file[260];
 		int strlen = buf->GetInt();
 		buf->GetString(file, strlen);
@@ -1014,23 +1129,27 @@ public:
 		files.insert(filename);
 	}
 
-	void RecvStateSwitch(CUtlBuffer* buf) {
+	void RecvStateSwitch(CUtlBuffer *buf)
+	{
 		auto CurrentState = buf->GetUnsignedChar();
 		SwitchState(CurrentState);
 	}
 
-	void RecvCallStack(CUtlBuffer* buf) {
+	void RecvCallStack(CUtlBuffer *buf)
+	{
 		CallStack();
 	}
 
-	void recvRequestVariables(CUtlBuffer* buf) {
+	void recvRequestVariables(CUtlBuffer *buf)
+	{
 		char scope[256];
 		int strlen = buf->GetInt();
 		buf->GetString(scope, strlen);
 		sendVariables(scope);
 	}
 
-	void recvRequestEvaluate(CUtlBuffer* buf) {
+	void recvRequestEvaluate(CUtlBuffer *buf)
+	{
 		int frameId;
 		char variable[256];
 		int strlen = buf->GetInt();
@@ -1039,10 +1158,12 @@ public:
 		evaluateVar(frameId, variable);
 	}
 
-	void recvDisconnect(CUtlBuffer* buf) {
+	void recvDisconnect(CUtlBuffer *buf)
+	{
 	}
 
-	void recvBreakpoint(CUtlBuffer* buf) {
+	void recvBreakpoint(CUtlBuffer *buf)
+	{
 		char path[256];
 		int strlen = buf->GetInt();
 		buf->GetString(path, strlen);
@@ -1054,7 +1175,8 @@ public:
 		setBreakpoint(filename, line, id);
 	}
 
-	void recvClearBreakpoints(CUtlBuffer* buf) {
+	void recvClearBreakpoints(CUtlBuffer *buf)
+	{
 		char path[256];
 		int strlen = buf->GetInt();
 		buf->GetString(path, strlen);
@@ -1064,20 +1186,24 @@ public:
 		clearBreakpoints(filename);
 	}
 
-	void stopDebugging() {
+	void stopDebugging()
+	{
 		current_state = DebugDead;
 		receive_walk_cmd = true;
 		cv.notify_one();
 		std::unique_lock<std::mutex> lck(mtx);
-		cv.wait(lck, [this] { return unload; });
+		cv.wait(lck, [this]
+				{ return unload; });
 	}
 
-	void recvStopDebugging(CUtlBuffer* buf) {
+	void recvStopDebugging(CUtlBuffer *buf)
+	{
 		stopDebugging();
 		removeClientID(socket);
 	}
 
-	void recvRequestSetVariable(CUtlBuffer* buf) {
+	void recvRequestSetVariable(CUtlBuffer *buf)
+	{
 		char var[256];
 		int strlen = buf->GetInt();
 		buf->GetString(var, strlen);
@@ -1088,65 +1214,82 @@ public:
 		setVariable(var, value, index);
 	}
 
-	void RecvCmd(const char* buffer, size_t len) {
-		CUtlBuffer buf((void*)buffer, len);
-		while (buf.TellGet() < len) {
+	void RecvCmd(const char *buffer, size_t len)
+	{
+		CUtlBuffer buf((void *)buffer, len);
+		while (buf.TellGet() < len)
+		{
 			int msg_len = buf.GetUnsignedInt();
 			int type = buf.GetUnsignedChar();
-			switch (type) {
-			case RequestFile: {
+			switch (type)
+			{
+			case RequestFile:
+			{
 				RecvDebugFile(&buf);
 				break;
 			}
-			case Pause: {
+			case Pause:
+			{
 				RecvStateSwitch(&buf);
 				break;
 			}
-			case Continue: {
+			case Continue:
+			{
 				RecvStateSwitch(&buf);
 				break;
 			}
-			case StepIn: {
+			case StepIn:
+			{
 				RecvStateSwitch(&buf);
 				break;
 			}
-			case StepOver: {
+			case StepOver:
+			{
 				RecvStateSwitch(&buf);
 				break;
 			}
-			case StepOut: {
+			case StepOut:
+			{
 				RecvStateSwitch(&buf);
 				break;
 			}
-			case RequestCallStack: {
+			case RequestCallStack:
+			{
 				RecvCallStack(&buf);
 				break;
 			}
-			case RequestVariables: {
+			case RequestVariables:
+			{
 				recvRequestVariables(&buf);
 				break;
 			}
-			case RequestEvaluate: {
+			case RequestEvaluate:
+			{
 				recvRequestEvaluate(&buf);
 				break;
 			}
-			case Disconnect: {
+			case Disconnect:
+			{
 				recvDisconnect(&buf);
 				break;
 			}
-			case ClearBreakpoints: {
+			case ClearBreakpoints:
+			{
 				recvClearBreakpoints(&buf);
 				break;
 			}
-			case SetBreakpoint: {
+			case SetBreakpoint:
+			{
 				recvBreakpoint(&buf);
 				break;
 			}
-			case StopDebugging: {
+			case StopDebugging:
+			{
 				recvStopDebugging(&buf);
 				break;
 			}
-			case RequestSetVariable: {
+			case RequestSetVariable:
+			{
 				recvRequestSetVariable(&buf);
 				break;
 			}
@@ -1157,54 +1300,60 @@ public:
 
 std::vector<std::unique_ptr<DebuggerClient>> clients;
 
-void addClientID(const TcpConnection::Ptr& session) {
+void addClientID(const TcpConnection::Ptr &session)
+{
 	clients.push_back(std::make_unique<DebuggerClient>(session));
 	clients.back()->AskFile();
 }
 
-void removeClientID(const TcpConnection::Ptr& session) {
-	for (auto it = clients.begin(); it != clients.end(); ++it) {
-		if ((*it)->socket == session) {
+void removeClientID(const TcpConnection::Ptr &session)
+{
+	for (auto it = clients.begin(); it != clients.end(); ++it)
+	{
+		if ((*it)->socket == session)
+		{
 			clients.erase(it);
 			break;
 		}
 	}
 }
 
-
-void debugThread() {
+void debugThread()
+{
 	auto service = TcpService::Create();
 	service->startWorkerThread(2);
 
 	auto mainLoop = std::make_shared<EventLoop>();
-	auto enterCallback = [=](const TcpConnection::Ptr& session) {
+	auto enterCallback = [=](const TcpConnection::Ptr &session)
+	{
 		addClientID(session);
 		session->setDisConnectCallback([=](
-			const TcpConnection::Ptr& session) {
-				removeClientID(session);
-			});
+										   const TcpConnection::Ptr &session)
+									   { removeClientID(session); });
 		auto contentLength = std::make_shared<size_t>();
-		session->setDataCallback([=](brynet::base::BasePacketReader& reader) {
+		session->setDataCallback([=](brynet::base::BasePacketReader &reader)
+								 {
 			for (auto& client : clients) {
 				if (client->socket == session) {
 					client->RecvCmd(reader.begin(), reader.size());
 					break;
 				}
 			}
-			reader.consumeAll();
-			});
+			reader.consumeAll(); });
 	};
 
 	wrapper::ListenerBuilder listener;
 	listener.WithService(service)
 		.AddSocketProcess(
-			{ [](TcpSocket& socket) { socket.setNodelay(); } })
+			{[](TcpSocket &socket)
+			 { socket.setNodelay(); }})
 		.WithMaxRecvBufferSize(1024 * 1024)
 		.AddEnterCallback(enterCallback)
 		.WithAddr(false, "0.0.0.0", SM_Debugger_port())
 		.asyncRun();
 
-	while (true) {
+	while (true)
+	{
 		mainLoop->loop(1000);
 	}
 }
@@ -1215,7 +1364,8 @@ void debugThread() {
  * @param msg    Message text.
  * @param fmt    Message formatting arguments (printf-style).
  */
-void DebugReport::OnDebugSpew(const char* msg, ...) {
+void DebugReport::OnDebugSpew(const char *msg, ...)
+{
 	va_list ap;
 	char buffer[512];
 
@@ -1232,16 +1382,21 @@ void DebugReport::OnDebugSpew(const char* msg, ...) {
  * @param report  Error report object.
  * @param iter      Stack frame iterator.
  */
-void DebugReport::ReportError(const IErrorReport& report,
-	IFrameIterator& iter) {
-	if (!clients.empty()) {
+void DebugReport::ReportError(const IErrorReport &report,
+							  IFrameIterator &iter)
+{
+	if (!clients.empty())
+	{
 		auto plugin = report.Context();
-		if (plugin) {
+		if (plugin)
+		{
 
 			auto found = false;
 			/* first search already found attached hook */
-			for (auto& client : clients) {
-				if (client && client->context_ == iter.Context()) {
+			for (auto &client : clients)
+			{
+				if (client && client->context_ == iter.Context())
+				{
 					found = true;
 					client->ReportError(report, iter);
 					break;
@@ -1250,21 +1405,24 @@ void DebugReport::ReportError(const IErrorReport& report,
 
 			/* if not found, search for new client who wants to attach to
 			 * current file */
-			if (!found) {
+			if (!found)
+			{
 				for (int i = 0; i < report.Context()
-					->GetRuntime()
-					->GetDebugInfo()
-					->NumFiles();
-					i++) {
+										->GetRuntime()
+										->GetDebugInfo()
+										->NumFiles();
+					 i++)
+				{
 					auto filename = std::string(report.Context()
-						->GetRuntime()
-						->GetDebugInfo()
-						->GetFileName(i));
+													->GetRuntime()
+													->GetDebugInfo()
+													->GetFileName(i));
 
 					auto current_file = std::filesystem::path(filename).filename().string();
 					lowercase(current_file);
 
-					for (auto& client : clients) {
+					for (auto &client : clients)
+					{
 						if (client->files.find(current_file) != client->files.end())
 						{
 							client->ReportError(report, iter);
@@ -1278,54 +1436,59 @@ void DebugReport::ReportError(const IErrorReport& report,
 	original->ReportError(report, iter);
 }
 
-void(DebugHandler)(SourcePawn::IPluginContext* IPlugin,
-	sp_debug_break_info_t& BreakInfo,
-	const SourcePawn::IErrorReport* IErrorReport) {
+void(DebugHandler)(SourcePawn::IPluginContext *IPlugin,
+				   sp_debug_break_info_t &BreakInfo,
+				   const SourcePawn::IErrorReport *IErrorReport)
+{
 	if (!IPlugin->IsDebugging())
 		return;
 
-	if (!clients.empty()) {
+	if (!clients.empty())
+	{
 		/* first search already found attached hook */
-		for (auto it = clients.begin(); it != clients.end(); ++it) {
-			const auto& client = *it;
-			if (client && client->context_ == IPlugin) {
+		for (auto it = clients.begin(); it != clients.end(); ++it)
+		{
+			const auto &client = *it;
+			if (client && client->context_ == IPlugin)
+			{
 				try
 				{
 					client->DebugHook(IPlugin, BreakInfo);
 				}
-				catch (DebuggerClient::debugger_stopped& ex)
+				catch (DebuggerClient::debugger_stopped &ex)
 				{
-					//it = clients.begin();
-					//continue;
+					// it = clients.begin();
+					// continue;
 					return;
 				}
 			}
-			
 		}
-				
+
 		for (int i = 0;
-			i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles();
-			i++) {
+			 i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles();
+			 i++)
+		{
 			auto filename =
 				IPlugin->GetRuntime()->GetDebugInfo()->GetFileName(
 					i);
 			auto current_file = std::filesystem::path(filename).filename().string();
 			lowercase(current_file);
 
-			for (auto it = clients.begin(); it != clients.end(); ++it) {
-				const auto& client = *it;
+			for (auto it = clients.begin(); it != clients.end(); ++it)
+			{
+				const auto &client = *it;
 				if (client->files.find(current_file) != client->files.end())
 				{
 					try
 					{
 						client->DebugHook(IPlugin, BreakInfo);
 					}
-					catch (DebuggerClient::debugger_stopped& ex)
+					catch (DebuggerClient::debugger_stopped &ex)
 					{
 						return;
 					}
 				}
-			}			
+			}
 		}
 	}
 }
