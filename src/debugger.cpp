@@ -1169,7 +1169,7 @@ void removeClientID(const TcpConnection::Ptr& session) {
 
 
 void debugThread() {
-	auto service = TcpService::Create();
+        auto service = brynet::net::IOThreadTcpService::Create();
 	service->startWorkerThread(2);
 
 	auto mainLoop = std::make_shared<EventLoop>();
