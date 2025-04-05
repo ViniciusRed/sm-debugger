@@ -323,7 +323,7 @@ public:
 				{
 					for (int i = 0; i < rtti->index(); i++)
 					{
-						auto start = addr;
+						uint32_t start = addr;
 
 						json[i] = read_variable(start, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
 						addr += 4;
@@ -369,9 +369,7 @@ public:
 		{
 			auto fields = current_image->getEnumFields(rtti->index());
 
-			size_t start{};
-
-			start = addr;
+			uint32_t start = addr;
 
 			for (auto& field : fields)
 			{
@@ -389,12 +387,11 @@ public:
 		{
 			auto fields = current_image->getTypeFields(rtti->index());
 			cell_t* ptr;
-			size_t field_offset{};
-			field_offset = addr;
+			uint32_t field_offset = addr;
 
 			for (auto& field : fields)
 			{
-				size_t start = field_offset;
+				uint32_t start = field_offset;
 
 				auto name = current_image->GetDebugName(field->name);
 				auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
@@ -406,8 +403,7 @@ public:
 		}
 
 		return json;
-	}
-	variable_s display_variable(SmxV1Image::Symbol* sym, uint32_t index[],
+	}	variable_s display_variable(SmxV1Image::Symbol* sym, uint32_t index[],
 		int idxlevel, bool noarray = false) {
 		nlohmann::json json;
 		variable_s var;
