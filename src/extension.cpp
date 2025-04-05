@@ -12,6 +12,7 @@ SMEXT_LINK(&g_zr);
 #define GetProcAddress dlsym
 // Linux doesn't have this function so this emulates its functionality
 void *GetModuleHandle(const char *name) {
+	std::string path = "cstrike/addons/sourcemod/bin/" + std::string(name);
 #define HMODULE void *
 	void *handle;
 	if (name == nullptr) {
@@ -20,7 +21,7 @@ void *GetModuleHandle(const char *name) {
 		return nullptr;
 	}
 
-	if ((handle = dlopen(name, RTLD_NOW)) == nullptr) {
+	if ((handle = dlopen(path.c_str(), RTLD_NOW)) == nullptr) {
 		// printf("Error:%s\n",dlerror());
 		// couldn't open this file
 		return nullptr;
@@ -42,7 +43,7 @@ bool Inited = false;
 
 extern DebugReport DebugListener;
 
-uint16_t sm_debugger_port = 12345;
+uint16_t sm_debugger_port = 27015;
 float sm_debugger_delay = 0.f;
 int SM_Debugger_port()
 {

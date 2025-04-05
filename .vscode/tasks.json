@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Project",
+      "type": "shell",
+      "windows": {
+        "command": "powershell -Command \"$hash = (git -C .\\dep\\vcpkg rev-parse HEAD); if (Test-Path vcpkg.json) { $json = Get-Content -Raw vcpkg.json | ConvertFrom-Json; $json.'builtin-baseline' = $hash; $json | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json } else { @{ 'builtin-baseline' = $hash } | ConvertTo-Json | Set-Content vcpkg.json }; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\bootstrap-vcpkg.bat'; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\vcpkg' install --triplet x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE='./dep/vcpkg/scripts/buildsystems/vcpkg.cmake' -DVCPKG_TARGET_TRIPLET=x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake --build build --config Release --parallel } } } }\""
+      },
+      "linux": {
+        "command": "HASH=$(git -C ./dep/vcpkg rev-parse HEAD) && if [ -f vcpkg.json ]; then jq --arg hash \"$HASH\" '.\"builtin-baseline\" = $hash' vcpkg.json > vcpkg.json.tmp && mv vcpkg.json.tmp vcpkg.json; else echo '{\"builtin-baseline\": \"'\"$HASH\"'\"}' > vcpkg.json; fi && cp cmake/x86-linux-sm.cmake dep/vcpkg/triplets/x86-linux-sm.cmake && ./dep/vcpkg/bootstrap-vcpkg.sh -musl && ./dep/vcpkg/vcpkg install --triplet x86-linux-sm --debug && rm -rf build && cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=\"./dep/vcpkg/scripts/buildsystems/vcpkg.cmake\" -DVCPKG_TARGET_TRIPLET=x86-linux-sm -DCMAKE_CXX_FLAGS_INIT=\"-m32\" -DCMAKE_C_FLAGS_INIT=\"-m32\" && cmake --build build -j"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": ["$msCompile", "$gcc"]
+    },
+    {
+      "label": "Build Windows",
+      "type": "shell",
+      "command": "powershell -Command \"$hash = (git -C .\\dep\\vcpkg rev-parse HEAD); if (Test-Path vcpkg.json) { $json = Get-Content -Raw vcpkg.json | ConvertFrom-Json; $json.'builtin-baseline' = $hash; $json | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json } else { @{ 'builtin-baseline' = $hash } | ConvertTo-Json | Set-Content vcpkg.json }; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\bootstrap-vcpkg.bat'; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\vcpkg' install --triplet x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE='./dep/vcpkg/scripts/buildsystems/vcpkg.cmake' -DVCPKG_TARGET_TRIPLET=x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake --build build --config Release --parallel } } } }\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build Linux",
+      "type": "shell",
+      "command": "HASH=$(git -C ./dep/vcpkg rev-parse HEAD) && if [ -f vcpkg.json ]; then jq --arg hash \"$HASH\" '.\"builtin-baseline\" = $hash' vcpkg.json > vcpkg.json.tmp && mv vcpkg.json.tmp vcpkg.json; else echo '{\"builtin-baseline\": \"'\"$HASH\"'\"}' > vcpkg.json; fi && cp cmake/x86-linux-sm.cmake dep/vcpkg/triplets/x86-linux-sm.cmake && ./dep/vcpkg/bootstrap-vcpkg.sh -musl && ./dep/vcpkg/vcpkg install --triplet x86-linux-sm --debug && rm -rf build && cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=\"./dep/vcpkg/scripts/buildsystems/vcpkg.cmake\" -DVCPKG_TARGET_TRIPLET=x86-linux-sm -DCMAKE_CXX_FLAGS_INIT=\"-m32\" -DCMAKE_C_FLAGS_INIT=\"-m32\" && cmake --build build -j",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$gcc"
+    }
+  ]
+}

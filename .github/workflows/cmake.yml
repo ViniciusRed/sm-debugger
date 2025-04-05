@@ -1,116 +1,213 @@
-name: CMake
+name: Build SourcePawn and SourceMod Debugger
 
-on: [push, pull_request]
+on:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build_linux:
-    runs-on: ubuntu-latest
-    
+  build_sourcepawn:
+    name: Build SourcePawn
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - windows-latest
+
     steps:
-    - uses: actions/checkout@v2    
-      with:
-        submodules: recursive
-        fetch-depth: 0
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib g++-multilib libstdc++6 lib32stdc++6 \
+            libc6-dev libc6-dev-i386 linux-libc-dev \
+            linux-libc-dev:i386 clang
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
 
-    - name: Install dep packets
-      working-directory: ${{github.workspace}}
-      run: |
-            sudo add-apt-repository 'deb http://mirror.yandex.ru/ubuntu/ hirsute main universe' -y
-            #sudo apt-get update
-            sudo apt-get --assume-yes install curl zip unzip tar pkg-config gcc-11-multilib g++-11-multilib ninja-build cmake
-            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 10
-            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 10
+      - name: Checkout SourceMod
+        uses: actions/checkout@v4
+        with:
+          repository: alliedmodders/sourcemod
+          path: sourcemod
+          submodules: recursive
 
-    - name: Install vcpkg packets
-      working-directory: ${{github.workspace}}
-      run: |
+      - name: Switch to debug symbol sourcepawn branch
+        working-directory: sourcemod/sourcepawn
+        run: |
+          git remote add peace https://github.com/peace-maker/sourcepawn.git
+          git fetch peace
+          git switch debug_api_symbols
+          git submodule update --init --recursive
+
+      - name: Install dependencies
+        run: |
+          python -m pip install wheel
+          pip install git+https://github.com/alliedmodders/ambuild
+
+      - name: Compile SourcePawn VM
+        working-directory: sourcemod/sourcepawn
+        run: |
+          python configure.py --enable-optimize --targets x86,x86_64
+          ambuild objdir
+
+      - name: Rename and Organize SourcePawn VM Files
+        shell: bash
+        run: |
+          mkdir -p "${{ github.workspace }}/sourcepawn-output/addons/sourcemod/bin/x64"
+          if [ "${{ runner.os }}" == "Linux" ]; then
+            cp sourcemod/sourcepawn/objdir/libsourcepawn/linux-x86/libsourcepawn.so "${{ github.workspace }}/sourcepawn-output/addons/sourcemod/bin/sourcepawn.jit.x86.so"
+            cp sourcemod/sourcepawn/objdir/libsourcepawn/linux-x86_64/libsourcepawn.so "${{ github.workspace }}/sourcepawn-output/addons/sourcemod/bin/x64/sourcepawn.vm.so"
+          else
+            cp sourcemod/sourcepawn/objdir/libsourcepawn/windows-x86/libsourcepawn.dll "${{ github.workspace }}/sourcepawn-output/addons/sourcemod/bin/sourcepawn.jit.x86.dll"
+            cp sourcemod/sourcepawn/objdir/libsourcepawn/windows-x86_64/libsourcepawn.dll "${{ github.workspace }}/sourcepawn-output/addons/sourcemod/bin/x64/sourcepawn.vm.dll"
+          fi
+
+      - name: Upload SourcePawn artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sourcepawn-${{ matrix.os }}
+          path: sourcepawn-output
+
+  build_sm_debugger:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo add-apt-repository 'deb http://mirror.yandex.ru/ubuntu/ hirsute main universe' -y
+          #sudo apt-get update
+          sudo apt-get --assume-yes install curl zip unzip tar pkg-config \
+            gcc-11-multilib g++-11-multilib ninja-build cmake tree libasio-dev
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 10
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 10
+
+      - name: Install Windows Dependencies
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja
+
+      - name: Setup MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Update vcpkg Baseline
+        shell: bash
+        run: |
+            if [ -f vcpkg.json ]; then
+              VCPKG_COMMIT=$(git -C dep/vcpkg rev-parse HEAD)
+              if [[ "$RUNNER_OS" == "Windows" ]]; then
+                powershell -Command "\
+                  \$json = Get-Content vcpkg.json | ConvertFrom-Json; \
+                  \$json | Add-Member -NotePropertyName 'builtin-baseline' -NotePropertyValue '$VCPKG_COMMIT' -Force; \
+                  \$json | ConvertTo-Json | Set-Content vcpkg.json"
+              else
+                # Simpler approach for Linux/macOS
+                sed -i "s/\"builtin-baseline\":[^,}]*/\"builtin-baseline\": \"$VCPKG_COMMIT\"/" vcpkg.json
+              fi
+              cat vcpkg.json
+            fi
+
+      - name: Install vcpkg
+        working-directory: ${{github.workspace}}
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" == "Linux" ]; then
             cp cmake/x86-linux-sm.cmake dep/vcpkg/triplets/x86-linux-sm.cmake
             ./dep/vcpkg/bootstrap-vcpkg.sh -musl
             ./dep/vcpkg/vcpkg install --triplet x86-linux-sm --debug
+          else
+            ./dep/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+            ./dep/vcpkg/vcpkg install --triplet x86-windows-static
+          fi
 
+      - name: Configure CMake (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          rm -rf build
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x86-linux-sm \
+            -DCMAKE_CXX_FLAGS_INIT="-m32" \
+            -DCMAKE_C_FLAGS_INIT="-m32"
+          cmake --build build -j
+          tree .
 
-    - name: Configure CMake
-      # Note the current convention is to use the -S and -B options here to specify source 
-      # and build directories, but this is only available with CMake 3.13 and higher.  
-      # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
-      run:  |
-            rm -rf build 
-            cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake"  -DVCPKG_TARGET_TRIPLET=x86-linux-sm  -DCMAKE_CXX_FLAGS_INIT="-m32" -DCMAKE_C_FLAGS_INIT="-m32"
-            cmake --build build -j 
-            tree .
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{github.workspace}}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x86-windows-static
+          cmake --build build --config Release --parallel
+          tree ${{github.workspace}}
 
-    - name: Deploy artifacts
-      uses: actions/upload-artifact@v2
-      with:
-        name: linux
-        path: ${{github.workspace}}/build/sm_debugger.ext.so
-          
-  build_windows:
-    runs-on: windows-latest
-    
-    steps:
-    - uses: actions/checkout@v2
-      with:
-        submodules: recursive
-        fetch-depth: 0
+      - name: Deploy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm_debugger-${{ matrix.os }}
+          path: ${{github.workspace}}/build/sm_debugger.ext.${{ runner.os == 'Linux' && 'so' || 'dll' }}
 
-    - name: Install ninja
-      run: choco install ninja      
-      
-    - name: setup devcmd
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x86
-      
-    - name: Install vcpkg packets
-      working-directory: ${{github.workspace}}
-      run: |
-           .\dep\vcpkg\bootstrap-vcpkg.bat
-           .\dep\vcpkg\vcpkg install --triplet x86-windows-static
-
-    - name: Configure CMake
-      working-directory: ${{github.workspace}}
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake"  -DVCPKG_TARGET_TRIPLET=x86-windows-static
-
-    - name: Build
-      working-directory: ${{github.workspace}}
-      run: |
-            cmake --build build --config Release --parallel
-            tree ${{github.workspace}}
-              
-    - name: Deploy artifacts
-      uses: actions/upload-artifact@v2
-      with:
-        name: windows
-        path: ${{github.workspace}}/build/sm_debugger.ext.dll
   publish:
-    name: 'Publish'
+    name: Publish Release
     runs-on: ubuntu-latest
-    needs: [build_windows, build_linux]  
+    needs: [build_sourcepawn, build_sm_debugger]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
-        uses: actions/checkout@v2        
+        uses: actions/checkout@v4
+
       - name: Set env
         run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-      - name: Deploying linux artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: linux
 
-      - name: Deploying windows artifacts
-        uses: actions/download-artifact@v2
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: windows
-      
+          pattern: sm_debugger-*
+          path: artifacts
+
+      - name: Download SourcePawn artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sourcepawn-*
+          path: sourcepawn-artifacts
+
       - name: Archive artifacts
         run: |
           mkdir -p addons/sourcemod/extensions
-          cp sm_debugger.ext.dll sm_debugger.ext.so addons/sourcemod/extensions
+
+          # Copy debugger extensions
+          cp artifacts/sm_debugger-*/* addons/sourcemod/extensions/
+
+          # Copy SourcePawn binaries for both platforms
+          cp -r sourcepawn-artifacts/sourcepawn-ubuntu-22.04/addons/sourcemod/bin/* addons/sourcemod/bin/
+          cp -r sourcepawn-artifacts/sourcepawn-windows-latest/addons/sourcemod/bin/* addons/sourcemod/bin/
+
+          # Create autoload file
           touch addons/sourcemod/extensions/sm_debugger.autoload
+
+          # Create zip archive
           7z a -tzip sm_debugger-bin-${RELEASE_VERSION}.zip addons
-        
+
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: sm_debugger-bin-*.zip
