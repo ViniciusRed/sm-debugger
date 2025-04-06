@@ -195,7 +195,10 @@ jobs:
 
       - name: Archive artifacts
         run: |
+          # Create all required directories
           mkdir -p addons/sourcemod/extensions
+          mkdir -p addons/sourcemod/bin
+          mkdir -p addons/sourcemod/bin/x64
 
           # Copy debugger extensions
           cp artifacts/sm_debugger-*/* addons/sourcemod/extensions/
