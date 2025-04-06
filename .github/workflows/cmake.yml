@@ -153,9 +153,10 @@ jobs:
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{github.workspace}}
+        shell: pwsh
         run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+          cmake -B build -G Ninja `
+            -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x86-windows-static
           cmake --build build --config Release --parallel
           tree ${{github.workspace}}
