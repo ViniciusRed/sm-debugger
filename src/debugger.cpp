@@ -419,7 +419,7 @@ public:
 		auto rtti = sym->rtti();
 		if (rtti && rtti->type_id)
 		{
-			size_t base = rtti->address;
+			uint32_t base = static_cast<uint32_t>(rtti->address);
 			if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
 				base += frm_; // addresses of local vars are relative to the frame
 
@@ -1169,7 +1169,7 @@ void removeClientID(const TcpConnection::Ptr& session) {
 
 
 void debugThread() {
-	auto service = TcpService::Create();
+        auto service = brynet::net::IOThreadTcpService::Create();
 	service->startWorkerThread(2);
 
 	auto mainLoop = std::make_shared<EventLoop>();
