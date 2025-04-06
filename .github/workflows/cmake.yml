@@ -3,6 +3,8 @@ name: Build SourcePawn and SourceMod Debugger
 on:
   pull_request:
   workflow_dispatch:
+  push:
+    tags: ['*']
 
 jobs:
   build_sourcepawn:
