@@ -193,27 +193,47 @@ jobs:
           pattern: sourcepawn-*
           path: sourcepawn-artifacts
 
-      - name: Archive artifacts
+      - name: Archive Linux artifacts
         run: |
-          # Create all required directories
-          mkdir -p addons/sourcemod/extensions
-          mkdir -p addons/sourcemod/bin
-          mkdir -p addons/sourcemod/bin/x64
+          # Create directories for Linux
+          mkdir -p linux/addons/sourcemod/extensions
+          mkdir -p linux/addons/sourcemod/bin
+          mkdir -p linux/addons/sourcemod/bin/x64
 
-          # Copy debugger extensions
-          cp artifacts/sm_debugger-*/* addons/sourcemod/extensions/
+          # Copy Linux debugger extension
+          cp artifacts/sm_debugger-ubuntu-latest/sm_debugger.ext.so linux/addons/sourcemod/extensions/
 
-          # Copy SourcePawn binaries for both platforms
-          cp -r sourcepawn-artifacts/sourcepawn-ubuntu-22.04/addons/sourcemod/bin/* addons/sourcemod/bin/
-          cp -r sourcepawn-artifacts/sourcepawn-windows-latest/addons/sourcemod/bin/* addons/sourcemod/bin/
+          # Copy Linux SourcePawn binaries
+          cp -r sourcepawn-artifacts/sourcepawn-ubuntu-22.04/addons/sourcemod/bin/* linux/addons/sourcemod/bin/
 
           # Create autoload file
-          touch addons/sourcemod/extensions/sm_debugger.autoload
+          touch linux/addons/sourcemod/extensions/sm_debugger.autoload
 
-          # Create zip archive
-          7z a -tzip sm_debugger-bin-${RELEASE_VERSION}.zip addons
+          # Create Linux zip
+          7z a -tzip sm_debugger-linux-${RELEASE_VERSION}.zip ./linux/addons
+
+      - name: Archive Windows artifacts
+        run: |
+          # Create directories for Windows
+          mkdir -p windows/addons/sourcemod/extensions
+          mkdir -p windows/addons/sourcemod/bin
+          mkdir -p windows/addons/sourcemod/bin/x64
+
+          # Copy Windows debugger extension
+          cp artifacts/sm_debugger-windows-latest/sm_debugger.ext.dll windows/addons/sourcemod/extensions/
+
+          # Copy Windows SourcePawn binaries
+          cp -r sourcepawn-artifacts/sourcepawn-windows-latest/addons/sourcemod/bin/* windows/addons/sourcemod/bin/
+
+          # Create autoload file
+          touch windows/addons/sourcemod/extensions/sm_debugger.autoload
+
+          # Create Windows zip
+          7z a -tzip sm_debugger-windows-${RELEASE_VERSION}.zip ./windows/addons
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: sm_debugger-bin-*.zip
+          files: |
+            sm_debugger-linux-*.zip
+            sm_debugger-windows-*.zip

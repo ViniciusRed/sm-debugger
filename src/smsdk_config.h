@@ -3,9 +3,9 @@
 #define _INCLUDE_SOURCEMOD_EXTENSION_CONFIG_H_
 
 #define SMEXT_CONF_NAME			"SM Debugger"
-#define SMEXT_CONF_DESCRIPTION	"SM Debugger"
+#define SMEXT_CONF_DESCRIPTION	"Allows plugins debugging using vscode"
 #define SMEXT_CONF_VERSION		PROJECT_VERSION
-#define SMEXT_CONF_AUTHOR		"Garey"
+#define SMEXT_CONF_AUTHOR		"Garey Mod by 这不是 Hack 而是技能"
 #define SMEXT_CONF_URL			"http://hlmod.ru"
 #define SMEXT_CONF_LOGTAG		"SMD"
 #define SMEXT_CONF_LICENSE		"WTFPL"
@@ -27,7 +27,7 @@
 //#define SMEXT_ENABLE_LIBSYS
 //#define SMEXT_ENABLE_MENUS
 //#define SMEXT_ENABLE_ADTFACTORY
-//#define SMEXT_ENABLE_PLUGINSYS
+#define SMEXT_ENABLE_PLUGINSYS
 //#define SMEXT_ENABLE_ADMINSYS
 //#define SMEXT_ENABLE_TEXTPARSERS
 //#define SMEXT_ENABLE_USERMSGS
