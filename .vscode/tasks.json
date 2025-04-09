@@ -40,6 +40,41 @@
         "cwd": "${workspaceFolder}"
       },
       "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Build Extension in Watch Mode",
+      "group": "build",
+      "type": "npm",
+      "script": "watch",
+      "path": "vscode/",
+      "problemMatcher": {
+      "base": "$tsc-watch"
+      },
+      "isBackground": true
+    },
+    {
+      "label": "Package Extension",
+      "type": "shell",
+      "command": "npx vsce package --target ${input:target}",
+      "options": {
+      "cwd": "${workspaceFolder}/vscode"
+      },
+      "problemMatcher": []
     }
-  ]
+    ],
+    "inputs": [
+    {
+      "id": "target",
+      "type": "pickString",
+      "description": "Select the target platform",
+      "options": [
+      "win32-x64",
+      "win32-ia32",
+      "linux-x64",
+      "linux-arm64",
+      "darwin-x64",
+      "darwin-arm64"
+      ]
+    }
+    ]
 }

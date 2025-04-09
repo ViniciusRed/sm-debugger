@@ -1,0 +1,132 @@
+{
+	"name": "sourcepawn-remote-debug",
+	"displayName": "SourcePawn Remote Debugger",
+	"version": "0.1.2",
+	"publisher": "Garey27, ViniciusRed",
+	"description": "sourcepawn remote debugger",
+	"author": {
+		"name": "ViniciusRed",
+		"email": "atalibavinicius@gmail.com"
+	},
+	"license": "MIT",
+	"keywords": [
+		"multi-root ready"
+	],
+	"engines": {
+		"vscode": "^1.99.1"
+	},
+	"categories": [
+		"Debuggers"
+	],
+	"private": true,
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ViniciusRed/sm-debugger"
+	},
+	"bugs": {
+		"url": "https://github.com/ViniciusRed/sm-debugger/issues"
+	},
+	"scripts": {
+		"prepublish": "tsc -p ./src",
+		"compile": "tsc -p ./src",
+		"tslint": "tslint ./src/**/*.ts",
+		"watch": "tsc -w -p ./src",
+		"test": "mocha -u tdd ./out/tests/",
+		"build": "npm run -S esbuild-base -- --sourcemap --sources-content=false && npm run -S esbuild-base -- --sourcemap --sources-content=false",
+		"esbuild-base": "esbuild ./src/extension.ts --bundle --tsconfig=./src/tsconfig.json --external:vscode --format=cjs --platform=node --outfile=dist/extension.js",
+		"package": "vsce package",
+		"publish": "vsce publish",
+		"vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify"
+	},
+	"devDependencies": {
+		"@types/vscode": "1.99.1",
+		"@types/glob": "8.1.0",
+		"@types/mocha": "10.0.10",
+		"@types/node": "22.14.0",
+		"@typescript-eslint/eslint-plugin": "8.29.1",
+		"@typescript-eslint/parser": "8.29.1",
+		"await-notify": "1.0.1",
+		"eslint": "9.24.0",
+		"esbuild": "0.25.2",
+		"events": "3.3.0",
+		"glob": "11.0.1",
+		"mocha": "11.2.0",
+		"path-browserify": "1.0.1",
+		"rimraf": "6.0.1",
+		"typescript": "5.8.3",
+		"url": "0.11.4",
+		"@vscode/vsce": "3.3.2",
+		"@vscode/debugadapter": "1.68.0",
+		"@vscode/debugadapter-testsupport": "1.68.0"
+	},
+	"main": "./dist/extension.js",
+	"activationEvents": [
+		"onDebugResolve:sourcepawn",
+		"onDebugDynamicConfigurations:sourcepawn",
+		"onCommand:extension.sourcepawn-remote-debug.getProgramName",
+		"onCommand:extension.sourcepawn-remote-debug.runEditorContents",
+		"onCommand:extension.sourcepawn-remote-debug.debugEditorContents"
+	],
+	"contributes": {
+		"breakpoints": [
+			{
+				"language": "sourcepawn"
+			}
+		],
+		"configuration": {
+			"id": "sourcepawn-remote-debug",
+			"type": "object",
+			"title": "SourceMod Configuration for SourcePawn",
+			"properties": {
+				"sourcepawn-remote-debug.remoteHost": {
+					"type": "string",
+					"description": "Remote host to which debugger attaches.",
+					"default": "0.0.0.0"
+				},
+				"sourcepawn-remote-debug.remotePort": {
+					"type": "integer",
+					"description": "Remote port to which debugger attaches.",
+					"default": 3000
+				},
+				"sourcepawn-remote-debug.stopOnEntry": {
+					"type": "boolean",
+					"description": "Automatically stop after launch.",
+					"default": false
+				},
+				"sourcepawn-remote-debug.trace": {
+					"type": "boolean",
+					"description": "Enable logging of the Debug Adapter Protocol.",
+					"default": true
+				}
+			}
+		},
+		"debuggers": [
+			{
+				"type": "sourcepawn",
+				"label": "sourcepawn Debugger",
+				"runtime": "node",
+				"program": "./out/debugAdapter.js",
+				"initialConfigurations": [
+					{
+						"type": "sourcepawn",
+						"request": "launch",
+						"name": "Run remote debugger",
+						"program": "${workspaceFolder}/test"
+					}
+				],
+				"configurationSnippets": [
+					{
+						"label": "sourcepawn Remote Debug: Launch",
+						"description": "A new configuration for remote debugging sourcepawn runtime.",
+						"body": {
+							"type": "sourcepawn",
+							"request": "launch",
+							"name": "Run remote debugger",
+							"program": "${workspaceFolder}/test"
+						}
+					}
+				]
+			}
+		]
+	}
+}

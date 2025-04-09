@@ -363,3 +363,12 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+vscode/.DS_Store
+vscode/node_modules/
+vscode/.vs/
+vscode/out
+vscode/dist
+vscode/npm-debug.log
+vscode/mock-debug.txt
+vscode/*.vsix

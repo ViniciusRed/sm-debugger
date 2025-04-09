@@ -1,0 +1,45 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "extensionHost",
+			"request": "launch",
+			"name": "Extension",
+			"preLaunchTask": "Build Extension in Watch Mode",
+			"runtimeExecutable": "${execPath}",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}/vscode"
+			],
+			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ]
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "Server",
+			"cwd": "${workspaceFolder}/vscode",
+			"program": "${workspaceFolder}/vscode/src/debugAdapter.ts",
+			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ]
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "Tests",
+			"cwd": "${workspaceFolder}/vscode",
+			"program": "${workspaceFolder}/vscode/node_modules/mocha/bin/_mocha",
+			"args": [
+				"-u", "tdd",
+				"--timeout", "999999",
+				"--colors",
+				"./out/tests/"
+			],
+			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ],
+			"internalConsoleOptions": "openOnSessionStart"
+		}
+	],
+	"compounds": [
+		{
+			"name": "Extension + Server",
+			"configurations": [ "Extension", "Server" ]
+		}
+	]
+}

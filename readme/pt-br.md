@@ -1,30 +1,28 @@
-# SourcePawn Debug Server
+# Servidor de Depuração SourcePawn
 
 ![SM-Ext](https://github.com/ViniciusRed/sm-debugger/actions/workflows/cmake.yml/badge.svg)
 ![VsCode](https://github.com/ViniciusRed/sm-debugger/actions/workflows/vscode.yml/badge.svg)
 
-[🇧🇷 Portuguese Version (Versão em Português)](readme/pt-br.md)
+### Descrição
+Este é um servidor de depuração para SourceMod que permite a depuração remota de scripts SourcePawn. Atualmente, inclui um adaptador para VSCode, permitindo integração com o Visual Studio Code.
 
-### Description
-This is a debug server for SourceMod that enables remote debugging of SourcePawn scripts. Currently, it includes a VSCode adapter for seamless integration with Visual Studio Code.
-
-### Dependencies
-- **SourcePawn Virtual Machine**: This extension requires the SourcePawn VM to function.
-  - When downloading from releases: The SourcePawn VM is already included in the release package
-  - To compile the SourcePawn VM:
-    1. Clone the SourcePawn repository:
+### Dependências
+- **Máquina Virtual SourcePawn**: Esta extensão requer a VM do SourcePawn para funcionar.
+  - Ao baixar o releases: O VM do SourcePawn já está incluída no pacote do release
+  - Para compilar a VM do SourcePawn:
+    1. Clone o repositório do SourcePawn:
        ```bash
        git clone --recursive https://github.com/alliedmodders/sourcemod.git sourcemod
        cd sourcemod/sourcepawn
        ```
-    2. Switch to the branch with debug symbols support:
+    2. Troque para a branch com suporte a símbolos de depuração:
        ```bash
        git remote add peace https://github.com/peace-maker/sourcepawn.git
        git fetch peace
        git switch debug_api_symbols
        git submodule update --init --recursive
        ```
-    3. Install the necessary dependencies:
+    3. Instale as dependências necessárias:
        **Linux:**
        ```bash
        sudo dpkg --add-architecture i386
@@ -35,25 +33,25 @@ This is a debug server for SourceMod that enables remote debugging of SourcePawn
          linux-libc-dev:i386 clang
        ```
        
-       Then set up the environment variables:
+       Em seguida, configure as variáveis de ambiente:
        ```bash
        export CC=clang
        export CXX=clang++
        ```
 
-       **For all systems:**
+       **Para todos os sistemas:**
        ```bash
        python -m pip install wheel
        pip install git+https://github.com/alliedmodders/ambuild
        ```
 
-    4. Configure and compile:
+    4. Configure e compile:
        ```bash
        python configure.py --enable-optimize --targets x86,x86_64
        ambuild objdir
        ```
 
-    5. The compiled files will be in:
+    5. Os arquivos compilados estarão em:
        **Linux:**
        - 32-bit: `objdir/libsourcepawn/linux-x86/libsourcepawn.so`
        - 64-bit: `objdir/libsourcepawn/linux-x86_64/libsourcepawn.so`
@@ -62,39 +60,39 @@ This is a debug server for SourceMod that enables remote debugging of SourcePawn
        - 32-bit: `objdir/libsourcepawn/windows-x86/libsourcepawn.dll`
        - 64-bit: `objdir/libsourcepawn/windows-x86_64/libsourcepawn.dll`
 
-    6. Copy the files to your SourceMod installation:
+    6. Copie os arquivos para sua instalação do SourceMod:
        - 32-bit: `addons/sourcemod/bin/sourcepawn.jit.x86.{so|dll}`
        - 64-bit: `addons/sourcemod/bin/x64/sourcepawn.vm.{so|dll}`
 
-### Features
-- Remote debugging support for SourcePawn scripts
-- Visual Studio Code integration
-- Real-time debugging capabilities
-- Support for breakpoints and variable inspection
+### Funcionalidades
+- Suporte para depuração remota de scripts SourcePawn
+- Integração com Visual Studio Code
+- Capacidades de depuração em tempo real
+- Suporte para breakpoints e inspeção de variáveis
 
-### Installation and Setup
+### Instalação e Configuração
 
-1. **Get the Extension**
-   - Clone this repository and build it yourself
-   - OR download the latest release from GitHub
+1. **Obter a Extensão**
+   - Clone este repositório e compile
+   - OU baixe a última versão do GitHub
 
-2. **Installation**
-   - Copy the extension file to `addons/sourcemod/extensions/`
-   - Create a file named `sm_debugger.autoload` in the same directory
+2. **Instalação**
+   - Copie o arquivo da extensão para `addons/sourcemod/extensions/`
+   - Crie um arquivo chamado `sm_debugger.autoload` no mesmo diretório
 
-3. **Server Setup**
-   - Start your Source Dedicated Server (SRCDS)
-   - Make sure the extension is loaded correctly
+3. **Configuração do Servidor**
+   - Inicie seu Servidor Dedicado Source (SRCDS)
+   - Certifique-se de que a extensão foi carregada corretamente
 
-4. **VSCode Integration**
-   - Install the VSCode SourcePawn Debug extension
-   - Follow the setup instructions at [sm-debugger](https://github.com/ViniciusRed/sm-debugger)
+4. **Integração com VSCode**
+   - Instale a extensão VSCode SourcePawn Debug
+   - Siga as instruções de configuração em [sm-debugger](https://github.com/ViniciusRed/sm-debugger)
 
-### Compiling from Source Code
+### Compilando do Código Fonte
 
-#### Debugger Extension (sm_debugger)
+#### Extensão do Depurador (sm_debugger)
 
-**Linux Dependencies:**
+**Dependências Linux:**
 ```bash
 sudo dpkg --add-architecture i386
 sudo apt-get update
@@ -104,14 +102,14 @@ sudo apt-get install -y --no-install-recommends \
   linux-libc-dev:i386 ninja-build cmake
 ```
 
-**Compiling on Linux:**
+**Compilando no Linux:**
 ```bash
-# Install vcpkg dependencies
+# Instale as dependências do vcpkg
 cp cmake/x86-linux-sm.cmake dep/vcpkg/triplets/x86-linux-sm.cmake
 ./dep/vcpkg/bootstrap-vcpkg.sh -musl
 ./dep/vcpkg/vcpkg install --triplet x86-linux-sm --debug
 
-# Configure and compile
+# Configure e compile
 rm -rf build
 cmake -B build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" \
@@ -121,44 +119,46 @@ cmake -B build -G Ninja \
 cmake --build build -j
 ```
 
-**Compiling on Windows:**
+**Compilando no Windows:**
 ```bash
-# Install vcpkg dependencies
+# Instale as dependências do vcpkg
 ./dep/vcpkg/bootstrap-vcpkg.bat -disableMetrics
 ./dep/vcpkg/vcpkg install --triplet x86-windows-static
 
-# Configure and compile
+# Configure e compile
 cmake -B build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="./dep/vcpkg/scripts/buildsystems/vcpkg.cmake" \
   -DVCPKG_TARGET_TRIPLET=x86-windows-static
 cmake --build build --config Release --parallel
 ```
 
-The compiled file will be generated in `build/sm_debugger.ext.so` (Linux) or `build/sm_debugger.ext.dll` (Windows).
+O arquivo compilado será gerado em `build/sm_debugger.ext.so` (Linux) ou `build/sm_debugger.ext.dll` (Windows).
 
-#### VSCode Extension
+#### Extensão VSCode
 
-To compile the VSCode extension:
+Para compilar a extensão do VSCode:
 
 ```bash
-# Enter the extension directory
+# Entre no diretório da extensão
 cd vscode
 
-# Install dependencies
+# Instale as dependências
 npm install
 
-# Compile the extension
+# Compile a extensão
 npm run compile
 
-# For development with automatic recompilation
+# Para desenvolvimento com recompilação automática
 npm run watch
 
-# To create the VSIX package
+# Para criar o pacote VSIX
 npx vsce package
 ```
 
+O arquivo VSIX será gerado no diretório `vscode/`.
+
 ## TODO
-- [x] Windows support
-- [x] VSCode integration
-- [ ] Enhanced debugging features
-- [ ] Linux testing and validation
+- [x] Suporte para Windows
+- [x] Integração com VSCode
+- [ ] Recursos de depuração aprimorados
+- [ ] Testes e validação no Linux
