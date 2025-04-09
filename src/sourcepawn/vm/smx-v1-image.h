@@ -234,6 +234,7 @@ class SmxV1Image : public FileReader
             if (rtti_sym) {
                 return rtti_sym;
             }
+            return nullptr;
         }
 
       private:

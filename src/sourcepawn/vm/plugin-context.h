@@ -76,14 +76,19 @@ class PluginContext : public BasePluginContext
  public:
   bool IsInExec() override;
 
-  static inline size_t offsetOfSp() {
-    return offsetof(PluginContext, sp_);
+    static inline size_t offsetOfSp() {
+    PluginContext* dummy = nullptr;
+    return reinterpret_cast<uintptr_t>(&dummy->sp_);
   }
+  
   static inline size_t offsetOfRuntime() {
-    return offsetof(PluginContext, m_pRuntime);
+    PluginContext* dummy = nullptr;
+    return reinterpret_cast<uintptr_t>(&dummy->m_pRuntime);
   }
+  
   static inline size_t offsetOfMemory() {
-    return offsetof(PluginContext, memory_);
+    PluginContext* dummy = nullptr;
+    return reinterpret_cast<uintptr_t>(&dummy->memory_);
   }
 
   int32_t* addressOfSp() {

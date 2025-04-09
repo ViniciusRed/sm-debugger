@@ -6,7 +6,6 @@ project(sm_debugger)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(fmt CONFIG REQUIRED)
-find_path(BRYNET_INCLUDE_DIRS "brynet/Version.hpp") 
 
 # Configuração do SDK
 if(NOT SDK)
@@ -100,7 +99,6 @@ set_target_properties(${OUTPUT_NAME} PROPERTIES
 
 # Diretórios de include
 target_include_directories(${OUTPUT_NAME} PRIVATE 
-    ${BRYNET_INCLUDE_DIRS}
     ${ZLIB_INCLUDE_DIR}
 )
 target_include_directories(${OUTPUT_NAME} PUBLIC 
@@ -113,4 +111,3 @@ target_include_directories(${OUTPUT_NAME} PUBLIC
 
 # Adicionar definições de versão do Git
 target_compile_definitions(${OUTPUT_NAME} PRIVATE ${PROJECT_VERSION4GIT_CFLAGS})
-message(STATUS "BRYNET_INCLUDE_DIRS: ${BRYNET_INCLUDE_DIRS}")
