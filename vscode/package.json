@@ -2,7 +2,7 @@
 	"name": "sourcepawn-remote-debug",
 	"displayName": "SourcePawn Remote Debugger",
 	"version": "0.1.2",
-	"publisher": "Garey27, ViniciusRed",
+	"publisher": "ViniciusRed",
 	"description": "sourcepawn remote debugger",
 	"author": {
 		"name": "ViniciusRed",
@@ -50,7 +50,7 @@
 		"esbuild": "0.25.2",
 		"events": "3.3.0",
 		"glob": "11.0.1",
-		"mocha": "11.2.0",
+		"mocha": "11.2.2",
 		"path-browserify": "1.0.1",
 		"rimraf": "6.0.1",
 		"typescript": "5.8.3",

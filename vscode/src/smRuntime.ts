@@ -2,380 +2,704 @@
 
 import { Socket } from 'net';
 import { EventEmitter } from 'events';
-
 import * as vscode from 'vscode';
 
-export enum MessageType
-{
-	Diagnostics = 0,
-	RequestFile,
-	File,
+// Debug configuration
+const DEBUG_ENABLED = true;         // Master switch for all debugging
+const DEBUG_MESSAGES = true;        // Enable logging of message content
+const DEBUG_CONNECTIONS = true;     // Enable detailed connection logging
 
-	StartDebugging,
-	StopDebugging,
-	Pause,
-	Continue,
-
-	RequestCallStack,
-	CallStack,
-
-	ClearBreakpoints,
-	SetBreakpoint,
-
-	HasStopped,
-	HasContinued,
-
-	StepOver,
-	StepIn,
-	StepOut,
-
+/**
+ * Message types for communication with the AMXX server
+ */
+export enum MessageType {
+    Diagnostics = 0,
+    RequestFile,
+    File,
+    StartDebugging,
+    StopDebugging,
+    Pause,
+    Continue,
+    RequestCallStack,
+    CallStack,
+    ClearBreakpoints,
+    SetBreakpoint,
+    HasStopped,
+    HasContinued,
+    StepOver,
+    StepIn,
+    StepOut,
     RequestSetVariable,
     SetVariable,
-	RequestVariables,
-	Variables,
-
-	RequestEvaluate,
-	Evaluate,
-
-	Disconnect,
-	TotalMessages
+    RequestVariables,
+    Variables,
+    RequestEvaluate,
+    Evaluate,
+    Disconnect,
+    TotalMessages
 }
 
-export class Message
-{
-    type : number;
-    offset : number;
-    buffer : Buffer;
-    size : number;
-    remainingSize : number;
+/**
+ * Mapping of message types to human-readable names for debugging
+ */
+const MessageTypeNames = {
+    [MessageType.Diagnostics]: "Diagnostics",
+    [MessageType.RequestFile]: "RequestFile",
+    [MessageType.File]: "File",
+    [MessageType.StartDebugging]: "StartDebugging",
+    [MessageType.StopDebugging]: "StopDebugging",
+    [MessageType.Pause]: "Pause",
+    [MessageType.Continue]: "Continue",
+    [MessageType.RequestCallStack]: "RequestCallStack", 
+    [MessageType.CallStack]: "CallStack",
+    [MessageType.ClearBreakpoints]: "ClearBreakpoints",
+    [MessageType.SetBreakpoint]: "SetBreakpoint",
+    [MessageType.HasStopped]: "HasStopped",
+    [MessageType.HasContinued]: "HasContinued",
+    [MessageType.StepOver]: "StepOver",
+    [MessageType.StepIn]: "StepIn",
+    [MessageType.StepOut]: "StepOut",
+    [MessageType.RequestSetVariable]: "RequestSetVariable",
+    [MessageType.SetVariable]: "SetVariable",
+    [MessageType.RequestVariables]: "RequestVariables",
+    [MessageType.Variables]: "Variables",
+    [MessageType.RequestEvaluate]: "RequestEvaluate",
+    [MessageType.Evaluate]: "Evaluate",
+    [MessageType.Disconnect]: "Disconnect"
+};
 
-    constructor(type : number, offset : number, size : number, buffer : Buffer)
-    {
+/**
+ * Debug logger function
+ */
+function debugLog(category: string, message: string, ...args: any[]) {
+    if (DEBUG_ENABLED) {
+        // Only log connection messages if DEBUG_CONNECTIONS is enabled
+        if (category === 'CONNECTION' && !DEBUG_CONNECTIONS) {
+            return;
+        }
+        
+        // Only log message-related content if DEBUG_MESSAGES is enabled
+        if ((category === 'MESSAGE' || category === 'SEND') && !DEBUG_MESSAGES) {
+            return;
+        }
+        
+        console.log(`[${category}] ${message}`, ...args);
+    }
+}
+
+/**
+ * Class representing a message from the AMXX server
+ */
+export class Message {
+    type: number;
+    offset: number;
+    buffer: Buffer;
+    size: number;
+    remainingSize: number;
+
+    constructor(type: number, offset: number, size: number, buffer: Buffer) {
         this.type = type;
         this.offset = offset;
         this.buffer = buffer;
         this.size = size;
+        this.remainingSize = buffer.length - offset - size;
     }
 
-    readInt() : number
-    {
-        let value = this.buffer.readIntLE(this.offset, 4);
+    /**
+     * Read a 32-bit integer from the message
+     */
+    readInt(): number {
+        const value = this.buffer.readInt32LE(this.offset);
         this.offset += 4;
         return value;
     }
 
-    readByte() : number
-    {
-        let value = this.buffer.readInt8(this.offset);
+    /**
+     * Read a byte from the message
+     */
+    readByte(): number {
+        const value = this.buffer.readInt8(this.offset);
         this.offset += 1;
         return value;
     }
 
-    readBool() : boolean
-    {
-        return this.readInt() != 0;
+    /**
+     * Read a boolean value from the message
+     */
+    readBool(): boolean {
+        return this.readInt() !== 0;
     }
 
-    readString() : string
-    {
+    /**
+     * Read a string from the message
+     */
+    readString(): string {
         let num = this.readInt();
-        let ucs2 = num < 0;
-        if(ucs2)
-        {
+        const ucs2 = num < 0;
+        
+        if (ucs2) {
             num = -num;
         }
 
-        if(ucs2)
-        {
+        if (ucs2) {
             let str = this.buffer.toString("utf16le", this.offset, this.offset + num * 2);
             this.offset += num * 2;
-            if(str[str.length - 1] == '\0')
-                str = str.substr(0, str.length - 1);
+            if (str[str.length - 1] === '\0') {
+                str = str.substring(0, str.length - 1);
+            }
             return str;
-        }
-        else
-        {
+        } else {
             let str = this.buffer.toString("utf8", this.offset, this.offset + num);
             this.offset += num;
-            if(str[str.length - 1] == '\0')
-                str = str.substr(0, str.length - 1);
+            if (str[str.length - 1] === '\0') {
+                str = str.substring(0, str.length - 1);
+            }
             return str;
         }
     }
+
+    /**
+     * Get debug representation of the message
+     */
+    toString(): string {
+        const typeName = MessageTypeNames[this.type] || `Unknown(${this.type})`;
+        return `Message(type=${typeName}, size=${this.size})`;
+    }
 }
 
-function writeInt(value : number) : Buffer
-{
-    let newBuffer = Buffer.alloc(4);
+/**
+ * Create a buffer containing a 32-bit integer
+ */
+function writeInt(value: number): Buffer {
+    const newBuffer = Buffer.alloc(4);
     newBuffer.writeInt32LE(value, 0);
     return newBuffer;
 }
 
-function writeString(str : string) : Buffer
-{
-    let newBuffer = Buffer.alloc(4);
-    newBuffer.writeInt32LE(str.length+1, 0);
-    return Buffer.concat([newBuffer, Buffer.from(str+"\0", "binary")]);
+/**
+ * Create a buffer containing a string
+ */
+function writeString(str: string): Buffer {
+    const newBuffer = Buffer.alloc(4);
+    newBuffer.writeInt32LE(str.length + 1, 0);
+    return Buffer.concat([newBuffer, Buffer.from(str + "\0", "binary")]);
 }
 
-let pendingBuffer : Buffer = Buffer.alloc(0);
+// Buffer for incomplete messages
+let pendingBuffer: Buffer = Buffer.alloc(0);
 
-export function readMessages(buffer : Buffer) : Array<Message>
-{
-    let list : Array<Message> = [];
+/**
+ * Read messages from a buffer
+ */
+export function readMessages(buffer: Buffer): Array<Message> {
+    const list: Array<Message> = [];
 
-    pendingBuffer = Buffer.concat([pendingBuffer, buffer])
+    pendingBuffer = Buffer.concat([pendingBuffer, buffer]);
+    debugLog('MESSAGE', `Received data, total pending buffer size: ${pendingBuffer.length} bytes`);
 
-    while (pendingBuffer.length >= 5)
-    {
+    while (pendingBuffer.length >= 5) {
         let offset = 0;
-        let msglen = pendingBuffer.readUIntLE(offset, 4);
+        const msglen = pendingBuffer.readUInt32LE(offset);
         offset += 4;
-        let msgtype = pendingBuffer.readInt8(offset);
+        const msgtype = pendingBuffer.readInt8(offset);
         offset += 1;
 
-        if (msglen <= pendingBuffer.length - offset)
-        {
-            list.push(new Message(msgtype, offset, msglen, pendingBuffer));
+        if (msglen <= pendingBuffer.length - offset) {
+            const message = new Message(msgtype, offset, msglen, pendingBuffer);
+            list.push(message);
             pendingBuffer = pendingBuffer.slice(offset + msglen);
-        }
-        else
-        {
+            
+            if (DEBUG_MESSAGES) {
+                debugLog('MESSAGE', `Parsed ${message.toString()}`);
+            }
+        } else {
+            debugLog('MESSAGE', `Incomplete message, waiting for more data (have ${pendingBuffer.length - offset}, need ${msglen})`);
             return list;
         }
+    }
+
+    if (pendingBuffer.length > 0) {
+        debugLog('MESSAGE', `Remaining data in buffer (${pendingBuffer.length} bytes), waiting for more`);
     }
 
     return list;
 }
 
-// Create a connection to AMXX
-let sock : Socket;
+// Socket connection to AMXX
+let sock: Socket | null = null;
 export let connected = false;
 export let events = new EventEmitter();
 
-export function connect()
-{
+// Reconnection settings
+let connectionRetries = 0;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // ms
+
+/**
+ * Connect to the AMXX server
+ */
+export function connect() {
     const host = vscode.workspace.getConfiguration('sourcepawn-remote-debug').get("remoteHost") as string;
     const port = vscode.workspace.getConfiguration('sourcepawn-remote-debug').get("remotePort") as number;
 
-    if (!sock)
-    {
-        sock = new Socket;
+    debugLog('CONNECTION', `Connecting to ${host}:${port}`);
+
+    if (sock) {
+        try {
+            sock.destroy();
+        } catch (e) {
+            debugLog('CONNECTION', `Error destroying existing socket: ${e.message}`);
+        }
     }
-	sock.connect(port, host, function()
-	{
-		console.log('Connection to srcds server established.');
-        events.emit("Connected");
+    
+    sock = new Socket();
+    connected = false; // Reset connection status until we're fully connected
+    
+    if (DEBUG_CONNECTIONS) {
+        // Add more detailed connection logging for debugging
+        sock.on('lookup', (err, address, family, host) => {
+            debugLog('CONNECTION', `DNS lookup for ${host}: ${address} (${family})`);
+        });
+        
+        sock.on('timeout', () => {
+            debugLog('CONNECTION', 'Connection timeout');
+        });
+        
+        sock.on('end', () => {
+            debugLog('CONNECTION', 'Server ended the connection');
+            connected = false;
+        });
+    }
+    
+    // Set longer timeout to prevent premature disconnection
+    sock.setTimeout(30000);
+    
+    sock.connect(port, host, function() {
+        debugLog('CONNECTION', 'Connection to srcds server established');
+        
+        if (DEBUG_CONNECTIONS && sock) { // Added null check
+            const localAddr = sock.localAddress ? `${sock.localAddress}:${sock.localPort}` : 'unknown';
+            const remoteAddr = sock.remoteAddress ? `${sock.remoteAddress}:${sock.remotePort}` : 'unknown';
+            debugLog('CONNECTION', `Socket details - Local: ${localAddr}, Remote: ${remoteAddr}`);
+        }
+        
+        // Reset retry counter on successful connection
+        connectionRetries = 0;
         connected = true;
-	});
+        events.emit("Connected");
+    });
 
-	sock.on("data", function(data : Buffer) {
-		let messages : Array<Message> = readMessages(data);
-		for (let msg of messages)
-		{
-            if (msg.type == MessageType.CallStack)
-            {
-                events.emit("CallStack", msg);
+    sock.on("data", function(data: Buffer) {
+        debugLog('SOCKET', `Received ${data.length} bytes`);
+        
+        const messages: Array<Message> = readMessages(data);
+        for (const msg of messages) {
+            if (DEBUG_MESSAGES) {
+                debugLog('SOCKET', `Processing message: ${MessageTypeNames[msg.type] || msg.type}`);
             }
-            else if (msg.type == MessageType.HasStopped)
-            {
-                events.emit("Stopped", msg);
+            
+            switch (msg.type) {
+                case MessageType.CallStack:
+                    events.emit("CallStack", msg);
+                    break;
+                case MessageType.HasStopped:
+                    events.emit("Stopped", msg);
+                    break;
+                case MessageType.HasContinued:
+                    events.emit("Continued", msg);
+                    break;
+                case MessageType.Variables:
+                    events.emit("Variables", msg);
+                    break;
+                case MessageType.Evaluate:
+                    events.emit("Evaluate", msg);
+                    break;
+                case MessageType.SetBreakpoint:
+                    events.emit("SetBreakpoint", msg);
+                    break;
+                case MessageType.SetVariable:
+                    events.emit("SetVariable", msg);
+                    break;
+                default:
+                    debugLog('SOCKET', `Unhandled message type: ${msg.type}`);
+                    break;
             }
-            else if (msg.type == MessageType.HasContinued)
-            {
-                events.emit("Continued", msg);
-            }
-            else if (msg.type == MessageType.Variables)
-            {
-                events.emit("Variables", msg);
-            }
-            else if (msg.type == MessageType.Evaluate)
-            {
-                events.emit("Evaluate", msg);
-            }
-            else if (msg.type == MessageType.SetBreakpoint)
-            {
-                events.emit("SetBreakpoint", msg);
-            }
-            else if (msg.type == MessageType.SetVariable)
-            {
-                events.emit("SetVariable", msg);
-            }
-		}
-	});
+        }
+    });
 
-	sock.on("error", function() {
-		if (sock != null)
-		{
-			sock.destroy();
+    sock.on("error", function(err) {
+        debugLog('CONNECTION', `Socket error: ${err.message}`);
+        if (DEBUG_CONNECTIONS) {
+            debugLog('CONNECTION', `Error details: ${JSON.stringify(err)}`);
+        }
+        if (sock != null) {
+            sock.destroy();
             connected = false;
-            events.emit("Closed");
-		}
-	});
+            events.emit("Closed", err);
+            
+            // Try to reconnect if we haven't reached the maximum number of retries
+            tryReconnect();
+        }
+    });
 
-	sock.on("close", function() {
-		if (sock != null)
-		{
-			sock.destroy();
+    sock.on("close", function(hadError) {
+        if (DEBUG_CONNECTIONS && sock) { // Added null check
+            debugLog('CONNECTION', `Connection closed${hadError ? ' due to transmission error' : ' normally'}`);
+            debugLog('CONNECTION', `Socket state: ${sock.readyState}`);
+        } else {
+            debugLog('CONNECTION', 'Connection closed');
+        }
+        
+        if (sock != null) {
+            sock.destroy();
             connected = false;
-            events.emit("Closed");
-		}
-	});
+            events.emit("Closed", hadError);
+            
+            // If connection was closed unexpectedly, try to reconnect
+            if (hadError) {
+                tryReconnect();
+            }
+        }
+    });
 }
 
-export function disconnect()
-{
-    sendDisconnect();
-    sock.destroy();
+/**
+ * Try to reconnect to the server with exponential backoff
+ */
+function tryReconnect() {
+    if (connectionRetries < MAX_RETRIES) {
+        const delay = RETRY_DELAY * Math.pow(2, connectionRetries);
+        debugLog('CONNECTION', `Attempting to reconnect in ${delay}ms (attempt ${connectionRetries + 1}/${MAX_RETRIES})`);
+        
+        setTimeout(() => {
+            connectionRetries++;
+            connect();
+        }, delay);
+    } else {
+        debugLog('CONNECTION', `Maximum reconnection attempts (${MAX_RETRIES}) reached. Giving up.`);
+        // Reset counter for future connection attempts
+        connectionRetries = 0;
+    }
+}
+
+/**
+ * Disconnect from the AMXX server
+ */
+export function disconnect() {
+    debugLog('CONNECTION', 'Disconnecting from server');
+    
+    if (DEBUG_CONNECTIONS && sock) { // Added null check
+        debugLog('CONNECTION', `Disconnecting from ${sock.remoteAddress}:${sock.remotePort}`);
+        debugLog('CONNECTION', `Connection was active for ${sock.bytesRead} bytes read, ${sock.bytesWritten} bytes written`);
+    }
+    
+    try {
+        sendDisconnect();
+    } catch (e) {
+        debugLog('CONNECTION', `Error sending disconnect message: ${e.message}`);
+    }
+    
+    if (sock) {
+        sock.destroy();
+    }
+    
     connected = false;
 }
 
-export function sendPause()
-{
-    let msg = Buffer.alloc(6);
-    msg.writeUInt32LE(2, 0);
-    msg.writeUInt8(MessageType.Pause, 4);
-    msg.writeUInt8(2,5)
+/**
+ * Send a message to the AMXX server
+ */
+function sendMessage(messageType: MessageType, payload: Buffer = Buffer.alloc(0), extraByte?: number) {
+    if (!sock) {
+        debugLog('ERROR', 'Cannot send message, socket not initialized');
+        return false;
+    }
+    
+    if (sock.destroyed) {
+        debugLog('ERROR', 'Cannot send message, socket is destroyed');
+        return false;
+    }
+    
+    if (!connected) {
+        debugLog('ERROR', 'Cannot send message, not connected (socket exists but not marked as connected)');
+        
+        // Try to reconnect if socket exists but we're not marked as connected
+        if (!sock.destroyed && sock.readyState === 'open') {
+            debugLog('CONNECTION', 'Socket appears to be open but not marked as connected, marking as connected');
+            connected = true;
+        } else {
+            return false;
+        }
+    }
+    
+    if (DEBUG_CONNECTIONS) {
+        // Log socket state before sending
+        const state = sock.destroyed ? 'destroyed' : 
+                     sock.connecting ? 'connecting' : 
+                     sock.pending ? 'pending' : 'established';
+        debugLog('CONNECTION', `Socket state before sending: ${state}, readyState: ${sock.readyState}`);
+    }
 
-    sock.write(msg);
+    let headerSize = 5; // 4 bytes for length + 1 byte for type
+    let headerBuffer = Buffer.alloc(headerSize);
+    
+    // If we have an extra byte, add it to the header
+    if (extraByte !== undefined) {
+        headerSize++;
+        headerBuffer = Buffer.alloc(headerSize);
+        headerBuffer.writeUInt8(extraByte, 5);
+    }
+    
+    // Write message type
+    headerBuffer.writeUInt8(messageType, 4);
+    
+    // Combine header and payload
+    const fullMessage = Buffer.concat([headerBuffer, payload]);
+    
+    // Write message length (excluding the length field itself)
+    fullMessage.writeUInt32LE(fullMessage.length - 4, 0);
+    
+    if (DEBUG_MESSAGES) {
+        debugLog('SEND', `Sending message: ${MessageTypeNames[messageType] || messageType} (${fullMessage.length} bytes)`);
+    }
+    
+    try {
+        return sock.write(fullMessage, (err) => {
+            if (err) {
+                debugLog('ERROR', `Error writing to socket: ${err.message}`);
+                
+                if (DEBUG_CONNECTIONS) {
+                    debugLog('CONNECTION', `Write error details: ${JSON.stringify(err)}`);
+                }
+                
+                // The socket had an error, mark as disconnected
+                connected = false;
+                return false;
+            }
+            
+            if (DEBUG_CONNECTIONS) {
+                debugLog('CONNECTION', `Message sent successfully (${fullMessage.length} bytes)`);
+            }
+        });
+    } catch (e) {
+        debugLog('ERROR', `Exception sending message: ${e.message}`);
+        connected = false;
+        return false;
+    }
 }
 
-export function sendContinue()
-{
-    let msg = Buffer.alloc(6);
-    msg.writeUInt32LE(2, 0);
-    msg.writeUInt8(MessageType.Continue, 4);
-    msg.writeUInt8(0,5)
-
-    sock.write(msg);
+/**
+ * Send a pause request
+ */
+export function sendPause() {
+    debugLog('DEBUG', 'Sending pause request');
+    return sendMessage(MessageType.Pause, Buffer.alloc(0), 2);
 }
 
-export function sendRequestCallStack()
-{
-    let msg = Buffer.alloc(5);
-    msg.writeUInt32LE(1, 0);
-    msg.writeUInt8(MessageType.RequestCallStack, 4);
-
-    sock.write(msg);
+/**
+ * Send a continue request
+ */
+export function sendContinue() {
+    debugLog('DEBUG', 'Sending continue request');
+    return sendMessage(MessageType.Continue, Buffer.alloc(0), 0);
 }
 
-export function sendDisconnect()
-{
-    let msg = Buffer.alloc(5);
-    msg.writeUInt32LE(1, 0);
-    msg.writeUInt8(MessageType.Disconnect, 4);
-
-    sock.write(msg);
+/**
+ * Send a request for the call stack
+ */
+export function sendRequestCallStack() {
+    debugLog('DEBUG', 'Requesting call stack');
+    return sendMessage(MessageType.RequestCallStack);
 }
 
-export function sendStartDebugging(filename)
-{
-    let msg = Buffer.alloc(5);
-    msg.writeUInt8(MessageType.RequestFile, 4);
-	msg = Buffer.concat([msg,  writeString(filename)]);
-
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
+/**
+ * Send a disconnect request
+ */
+export function sendDisconnect() {
+    debugLog('DEBUG', 'Sending disconnect request');
+    return sendMessage(MessageType.Disconnect);
 }
 
-export function sendStopDebugging()
-{
-    let msg = Buffer.alloc(5);
-    msg.writeUInt32LE(1, 0);
-    msg.writeUInt8(MessageType.StopDebugging, 4);
-
-    sock.write(msg);
+export function sendStartDebugging(filename: string) {
+    debugLog('DEBUG', `Starting debugging for file: ${filename}`);
+    
+    // Ensure we have a connection before trying to send
+    if (!isConnected()) {
+        debugLog('CONNECTION', `Not connected when trying to start debugging for ${filename}, attempting to reconnect...`);
+        
+        // Set up a promise to wait for the connection
+        const connectionPromise = new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                events.removeListener('Connected', onConnect);
+                reject(new Error('Connection timeout'));
+            }, 5000);
+            
+            const onConnect = () => {
+                clearTimeout(timeout);
+                events.removeListener('Connected', onConnect);
+                resolve();
+            };
+            
+            events.once('Connected', onConnect);
+            connect();
+        });
+        
+        // Return the result of the promise chain
+        return connectionPromise
+            .then(() => {
+                debugLog('CONNECTION', 'Reconnected successfully, now sending start debugging message');
+                return sendMessage(MessageType.RequestFile, writeString(filename));
+            })
+            .catch(err => {
+                debugLog('ERROR', `Failed to reconnect: ${err.message}`);
+                return false;
+            });
+    }
+    
+    return sendMessage(MessageType.RequestFile, writeString(filename));
 }
 
-export function clearBreakpoints(pathname : string)
-{
-    let msg = Buffer.alloc(5);
-    msg.writeUInt8(MessageType.ClearBreakpoints, 4);
-    msg = Buffer.concat([msg, writeString(pathname)]);
-
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
+/**
+ * Send a stop debugging request
+ */
+export function sendStopDebugging() {
+    debugLog('DEBUG', 'Stopping debugging');
+    return sendMessage(MessageType.StopDebugging);
 }
 
-export function setBreakpoint(id : number, pathname : string, line : number)
-{
-    let head = Buffer.alloc(5);
-    head.writeUInt32LE(1, 0);
-    head.writeUInt8(MessageType.SetBreakpoint, 4);
+/**
+ * Clear all breakpoints for a file
+ */
+export function clearBreakpoints(pathname: string) {
+    debugLog('DEBUG', `Clearing breakpoints for: ${pathname}`);
+    return sendMessage(MessageType.ClearBreakpoints, writeString(pathname));
+}
 
-    let msg = Buffer.concat([
-        head, writeString(pathname), writeInt(line), writeInt(id)
+/**
+ * Set a breakpoint
+ */
+export function setBreakpoint(id: number, pathname: string, line: number) {
+    debugLog('DEBUG', `Setting breakpoint ${id} at ${pathname}:${line}`);
+    
+    const payload = Buffer.concat([
+        writeString(pathname), 
+        writeInt(line), 
+        writeInt(id)
     ]);
-
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
+    
+    return sendMessage(MessageType.SetBreakpoint, payload);
 }
 
-export function sendStepIn()
-{
-    let msg = Buffer.alloc(6);
-    msg.writeUInt32LE(2, 0);
-    msg.writeUInt8(MessageType.StepIn, 4);
-    msg.writeUInt8(3,5)
-
-    sock.write(msg);
+/**
+ * Send a step-in request
+ */
+export function sendStepIn() {
+    debugLog('DEBUG', 'Stepping in');
+    return sendMessage(MessageType.StepIn, Buffer.alloc(0), 3);
 }
 
-export function sendStepOver()
-{
-    let msg = Buffer.alloc(6);
-    msg.writeUInt32LE(2, 0);
-    msg.writeUInt8(MessageType.StepOver, 4);
-    msg.writeUInt8(4,5)
-
-    sock.write(msg);
+/**
+ * Send a step-over request
+ */
+export function sendStepOver() {
+    debugLog('DEBUG', 'Stepping over');
+    return sendMessage(MessageType.StepOver, Buffer.alloc(0), 4);
 }
 
-export function sendStepOut()
-{
-    let msg = Buffer.alloc(6);
-    msg.writeUInt32LE(5, 0);
-    msg.writeUInt8(MessageType.StepOut, 4);
-    msg.writeUInt8(5,5)
-
-
-    sock.write(msg);
+/**
+ * Send a step-out request
+ */
+export function sendStepOut() {
+    debugLog('DEBUG', 'Stepping out');
+    return sendMessage(MessageType.StepOut, Buffer.alloc(0), 5);
 }
 
-export function sendRequestSendVariable(variable: string, value: string, index: number)
-{
-    let head = Buffer.alloc(5);
-    head.writeUInt8(MessageType.RequestSetVariable, 4);
-
-    let msg = Buffer.concat([
-        head, writeString(variable), writeString(value), writeInt(index)
+/**
+ * Send a request to set a variable value
+ * This is used in the debug UI to modify variable values during debugging
+ */
+export function sendRequestSetVariable(variable: string, value: string, index: number) {
+    debugLog('DEBUG', `Setting variable '${variable}' to '${value}' at index ${index}`);
+    
+    const payload = Buffer.concat([
+        writeString(variable), 
+        writeString(value), 
+        writeInt(index)
     ]);
-
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
-}
-export function sendRequestVariables(path : string)
-{
-    let head = Buffer.alloc(5);
-    head.writeUInt8(MessageType.RequestVariables, 4);
-
-    let msg = Buffer.concat([
-        head, writeString(path)
-    ]);
-
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
+    
+    return sendMessage(MessageType.RequestSetVariable, payload);
 }
 
-export function sendRequestEvaluate(path : string, frameId : number)
-{
-    let head = Buffer.alloc(5);
-    head.writeUInt8(MessageType.RequestEvaluate, 4);
+/**
+ * Send a request for variables
+ */
+export function sendRequestVariables(path: string) {
+    debugLog('DEBUG', `Requesting variables for path: ${path}`);
+    return sendMessage(MessageType.RequestVariables, writeString(path));
+}
 
-    let msg = Buffer.concat([
-        head, writeString(path), writeInt(frameId)
+/**
+ * Send a request to evaluate an expression
+ */
+export function sendRequestEvaluate(path: string, frameId: number) {
+    debugLog('DEBUG', `Evaluating '${path}' in frame ${frameId}`);
+    
+    const payload = Buffer.concat([
+        writeString(path), 
+        writeInt(frameId)
     ]);
+    
+    return sendMessage(MessageType.RequestEvaluate, payload);
+}
 
-    msg.writeUInt32LE(msg.length - 4, 0);
-    sock.write(msg);
+/**
+ * Check the connection status
+ */
+export function isConnected(): boolean {
+    if (!sock) {
+        return false;
+    }
+    
+    // Check both our connected flag and the socket state
+    return connected && 
+           !sock.destroyed && 
+           sock.readyState === 'open';
+}
+
+/**
+ * Get connection information
+ */
+export function getConnectionInfo() {
+    if (!connected || !sock) {
+        return { connected: false };
+    }
+    
+    const info = {
+        connected: connected,
+        localAddress: sock.localAddress,
+        localPort: sock.localPort,
+        remoteAddress: sock.remoteAddress,
+        remotePort: sock.remotePort
+    };
+    
+    if (DEBUG_CONNECTIONS) {
+        // Add extended information when DEBUG_CONNECTIONS is enabled
+        return {
+            ...info,
+            bytesRead: sock.bytesRead,
+            bytesWritten: sock.bytesWritten,
+            readyState: sock.readyState,
+            pending: sock.pending,
+            connecting: sock.connecting,
+            destroyed: sock.destroyed,
+            timeout: sock.timeout,
+            pendingBufferSize: pendingBuffer.length
+        };
+    }
+    
+    return info;
+}
+
+export function sendRequestSendVariable(name: string, value: string, index: number) {
+	throw new Error('Function not implemented.');
 }
