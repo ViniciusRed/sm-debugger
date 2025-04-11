@@ -24,9 +24,8 @@
 #endif
 
 #define ASIO_STANDALONE
-#include <asio.hpp>
-
 #include "sourcepawn/include/sp_vm_types.h"
+#include <asio.hpp>
 #include <nlohmann/json.hpp>
 
 using namespace sp;
@@ -36,16 +35,17 @@ using asio::ip::tcp;
 class TcpSession : public std::enable_shared_from_this<TcpSession>
 {
 public:
-  static std::shared_ptr<TcpSession>
-  create(tcp::socket socket)
+  static std::shared_ptr<TcpSession> create(tcp::socket socket)
   {
     return std::shared_ptr<TcpSession>(new TcpSession(std::move(socket)));
   }
 
-  ~TcpSession() { close(); }
+  ~TcpSession()
+  {
+    close();
+  }
 
-  void
-  start()
+  void start()
   {
     fmt::print(stderr, "Starting TcpSession\n");
     fflush(stderr);
@@ -53,23 +53,24 @@ public:
     // Configurações de socket para melhor detecção de desconexão
     asio::socket_base::keep_alive option(true);
     socket_.set_option(option);
-    
+
     // Configura TCP no delay
     socket_.set_option(tcp::no_delay(true));
 
     // Configura o socket para keepalive mais agressivo
-    #if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
-      // Começa a enviar keepalive após 5 segundos de inatividade
-      int keepalive_time = 5;
-      // Envia keepalive a cada 1 segundo
-      int keepalive_interval = 1;
-      // Número máximo de tentativas antes de considerar a conexão perdida
-      int keepalive_count = 3;
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+        // Começa a enviar keepalive após 5 segundos de inatividade
+    int keepalive_time = 5;
+    // Envia keepalive a cada 1 segundo
+    int keepalive_interval = 1;
+    // Número máximo de tentativas antes de considerar a conexão perdida
+    int keepalive_count = 3;
 
-      setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPIDLE, &keepalive_time, sizeof(keepalive_time));
-      setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPINTVL, &keepalive_interval, sizeof(keepalive_interval));
-      setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPCNT, &keepalive_count, sizeof(keepalive_count));
-    #endif
+    setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPIDLE, &keepalive_time, sizeof(keepalive_time));
+    setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPINTVL, &keepalive_interval,
+      sizeof(keepalive_interval));
+    setsockopt(socket_.native_handle(), IPPROTO_TCP, TCP_KEEPCNT, &keepalive_count, sizeof(keepalive_count));
+#endif
 
     // Inicia o timer de timeout com intervalo menor
     start_timeout_timer();
@@ -78,8 +79,7 @@ public:
     do_read();
   }
 
-  void
-  send(const char *data, size_t length)
+  void send(const char* data, size_t length)
   {
     if (!connected_)
     {
@@ -93,85 +93,75 @@ public:
     // assíncrona
     auto buffer = std::make_shared<std::vector<char>>(data, data + length);
 
-    asio::async_write(
-        socket_, asio::buffer(*buffer),
-        [this, self, buffer](std::error_code ec, std::size_t /*length*/)
+    asio::async_write(socket_, asio::buffer(*buffer),
+      [this, self, buffer](std::error_code ec, std::size_t /*length*/) {
+        if (ec)
         {
-          if (ec)
-          {
-            handle_error(ec);
-          }
-        });
+          handle_error(ec);
+        }
+      });
   }
 
-  tcp::socket &
-  socket()
+  tcp::socket& socket()
   {
     return socket_;
   }
-  bool
-  is_connected() const
+  bool is_connected() const
   {
     return connected_;
   }
 
-  void
-  set_data_callback(std::function<void(const char *, size_t)> cb)
+  void set_data_callback(std::function<void(const char*, size_t)> cb)
   {
     data_callback_ = std::move(cb);
   }
 
-  void
-  set_disconnect_callback(std::function<void()> cb)
+  void set_disconnect_callback(std::function<void()> cb)
   {
     disconnect_callback_ = std::move(cb);
   }
 
 private:
   TcpSession(tcp::socket socket)
-      : socket_(std::move(socket)), connected_(true),
-        last_activity_(std::chrono::steady_clock::now())
+    : socket_(std::move(socket)), connected_(true), last_activity_(std::chrono::steady_clock::now())
   {
     auto endpoint = socket_.remote_endpoint();
-    fmt::print(stderr, "[CONNECT] Nova conexão de {}:{}\n", 
-              endpoint.address().to_string(), endpoint.port());
+    fmt::print(stderr, "[CONNECT] Nova conexão de {}:{}\n", endpoint.address().to_string(), endpoint.port());
     fflush(stderr);
   }
 
-  void
-  start_timeout_timer()
+  void start_timeout_timer()
   {
     timer_ = std::make_shared<asio::steady_timer>(socket_.get_executor());
     check_timeout();
   }
 
-  void
-  check_timeout()
+  void check_timeout()
   {
     if (!connected_)
       return;
 
     auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                       now - last_activity_)
-                       .count();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_activity_).count();
 
     // Reduzir o timeout para 10 segundos
     if (elapsed > 10)
-    { 
+    {
       fmt::print(stderr, "[TIMEOUT] Connection timed out after {} seconds of inactivity\n", elapsed);
       fflush(stderr);
-      
+
       // Tentar enviar um ping antes de fechar
-      try {
+      try
+      {
         // Envia um pacote de ping
-        const char ping[] = {static_cast<char>(0xC0)}; // 0xC0 = comando de ping
+        const char ping[] = { static_cast<char>(0xC0) }; // 0xC0 = comando de ping
         send(ping, sizeof(ping));
-        
+
         // Atualiza o último momento de atividade
         last_activity_ = now;
       }
-      catch (...) {
+      catch (...)
+      {
         // Se falhar ao enviar o ping, fecha a conexão
         fmt::print(stderr, "[TIMEOUT] Failed to send ping, closing connection\n");
         fflush(stderr);
@@ -183,16 +173,15 @@ private:
     auto self = shared_from_this();
     // Verificar mais frequentemente (a cada 2 segundos)
     timer_->expires_after(std::chrono::seconds(2));
-    timer_->async_wait([this, self](const std::error_code &ec)
-                       {
+    timer_->async_wait([this, self](const std::error_code& ec) {
       if (!ec && connected_)
-        {
-          check_timeout();
-        } });
+      {
+        check_timeout();
+      }
+      });
   }
 
-  void
-  do_read()
+  void do_read()
   {
     if (!connected_)
     {
@@ -200,90 +189,83 @@ private:
     }
 
     auto self = shared_from_this();
-    socket_.async_read_some(
-        asio::buffer(data_, max_length),
-        [this, self](std::error_code ec, std::size_t length)
+    socket_.async_read_some(asio::buffer(data_, max_length), [this, self](std::error_code ec, std::size_t length) {
+      if (!ec)
+      {
+        last_activity_ = std::chrono::steady_clock::now();
+
+        // Log detalhado dos dados recebidos
+        std::string hexDump = fmt::format("[READ] Recebido {} bytes | HexDump: ", length);
+        for (size_t i = 0; i < length; ++i)
         {
-          if (!ec)
+          hexDump += fmt::format("{:02x} ", static_cast<unsigned char>(data_[i]));
+        }
+        fmt::print(stderr, "{}\n", hexDump);
+        fflush(stderr);
+
+        // Se for um pacote de 5 bytes, considerar como comando de
+        // desconexão
+        if (length == 5)
+        {
+          fmt::print(stderr, "[DISCONNECT] Detectado pacote de desconexão (5 bytes)\n");
+          fflush(stderr);
+
+          // Envia confirmação de desconexão antes de fechar
+          const char response[] = { static_cast<char>(0xD1), 0x01 }; // 0xD1 = CMD_DISCONNECT, 0x01 = sucesso
+          send(response, sizeof(response));
+
+          close();
+          return;
+        }
+
+        if (data_callback_)
+        {
+          try
           {
-            last_activity_ = std::chrono::steady_clock::now();
-            
-            // Log detalhado dos dados recebidos
-            std::string hexDump = fmt::format("[READ] Recebido {} bytes | HexDump: ", length);
-            for (size_t i = 0; i < length; ++i)
-            {
-              hexDump += fmt::format("{:02x} ", static_cast<unsigned char>(data_[i]));
-            }
-            fmt::print(stderr, "{}\n", hexDump);
-            fflush(stderr);
+            std::vector<char> dataCopy(data_, data_ + length);
+            data_callback_(dataCopy.data(), length);
 
-            // Se for um pacote de 5 bytes, considerar como comando de desconexão
-            if (length == 5)
-            {
-              fmt::print(stderr, "[DISCONNECT] Detectado pacote de desconexão (5 bytes)\n");
-              fflush(stderr);
-              
-              // Envia confirmação de desconexão antes de fechar
-              const char response[] = {static_cast<char>(0xD1), 0x01}; // 0xD1 = CMD_DISCONNECT, 0x01 = sucesso
-              send(response, sizeof(response));
-              
-              close();
-              return;
-            }
-
-            if (data_callback_)
-            {
-              try
-              {
-                std::vector<char> dataCopy(data_, data_ + length);
-                data_callback_(dataCopy.data(), length);
-
-                if (connected_)
-                {
-                  do_read();
-                }
-              }
-              catch (const std::exception &e)
-              {
-                fmt::print(stderr, "[ERROR] Erro no callback de dados: {}\n", e.what());
-                fflush(stderr);
-                handle_error(ec);
-              }
-            }
-            else if (connected_)
+            if (connected_)
             {
               do_read();
             }
           }
-          else if (ec == asio::error::eof || 
-                   ec == asio::error::connection_reset || 
-                   ec == asio::error::operation_aborted ||
-                   ec == asio::error::connection_aborted ||
-                   ec == asio::error::broken_pipe)
+          catch (const std::exception& e)
           {
-            fmt::print(stderr, "[DISCONNECT] Conexão encerrada pelo peer: {} ({})\n", 
-                      ec.message(), ec.value());
-            fflush(stderr);
-            close();
-          }
-          else
-          {
-            fmt::print(stderr, "[ERROR] Erro de socket: {} ({})\n", 
-                      ec.message(), ec.value());
+            fmt::print(stderr, "[ERROR] Erro no callback de dados: {}\n", e.what());
             fflush(stderr);
             handle_error(ec);
           }
-        });
+        }
+        else if (connected_)
+        {
+          do_read();
+        }
+      }
+      else if (ec == asio::error::eof || ec == asio::error::connection_reset ||
+        ec == asio::error::operation_aborted || ec == asio::error::connection_aborted ||
+        ec == asio::error::broken_pipe)
+      {
+        fmt::print(stderr, "[DISCONNECT] Conexão encerrada pelo peer: {} ({})\n", ec.message(), ec.value());
+        fflush(stderr);
+        close();
+      }
+      else
+      {
+        fmt::print(stderr, "[ERROR] Erro de socket: {} ({})\n", ec.message(), ec.value());
+        fflush(stderr);
+        handle_error(ec);
+      }
+      });
   }
 
-  void
-  close()
+  void close()
   {
     if (std::exchange(connected_, false))
-    { 
+    {
       auto endpoint = socket_.remote_endpoint();
-      fmt::print(stderr, "[DISCONNECT] Fechando conexão com {}:{}\n", 
-                endpoint.address().to_string(), endpoint.port());
+      fmt::print(stderr, "[DISCONNECT] Fechando conexão com {}:{}\n", endpoint.address().to_string(),
+        endpoint.port());
       fflush(stderr);
 
       if (timer_)
@@ -318,7 +300,7 @@ private:
           fflush(stderr);
           disconnect_callback_();
         }
-        catch (const std::exception &e)
+        catch (const std::exception& e)
         {
           fmt::print(stderr, "[ERROR] Erro no callback de desconexão: {}\n", e.what());
           fflush(stderr);
@@ -330,8 +312,7 @@ private:
     }
   }
 
-  void
-  handle_error(const std::error_code &ec)
+  void handle_error(const std::error_code& ec)
   {
     fmt::print(stderr, "Socket error: {}\n", ec.message());
     fflush(stderr);
@@ -345,7 +326,7 @@ private:
     max_length = 1024 * 1024
   };
   char data_[max_length];
-  std::function<void(const char *, size_t)> data_callback_;
+  std::function<void(const char*, size_t)> data_callback_;
   std::function<void()> disconnect_callback_;
   bool connected_;
   std::chrono::steady_clock::time_point last_activity_;
@@ -359,9 +340,7 @@ using TcpConnectionPtr = std::shared_ptr<TcpSession>;
 //
 //  Lowercases string
 //
-template <typename T>
-std::basic_string<T>
-lowercase(const std::basic_string<T> &s)
+template <typename T> std::basic_string<T> lowercase(const std::basic_string<T>& s)
 {
   std::basic_string<T> s2 = s;
   std::transform(s2.begin(), s2.end(), s2.begin(), tolower);
@@ -407,8 +386,7 @@ enum MessageType
   TotalMessages
 };
 
-std::vector<std::string>
-split_string(const std::string &str, const std::string &delimiter)
+std::vector<std::string> split_string(const std::string& str, const std::string& delimiter)
 {
   std::vector<std::string> strings;
 
@@ -426,7 +404,7 @@ split_string(const std::string &str, const std::string &delimiter)
   return strings;
 }
 DebugReport DebugListener;
-void removeClientID(const TcpConnectionPtr &session);
+void removeClientID(const TcpConnectionPtr& session);
 class DebuggerClient
 {
 public:
@@ -459,7 +437,7 @@ public:
   bool receive_walk_cmd = false;
   std::mutex mtx;
   std::condition_variable cv;
-  SourcePawn::IPluginContext *context_;
+  SourcePawn::IPluginContext* context_;
   uint32_t current_line;
   std::unordered_map<std::string, std::unordered_set<long>> break_list;
   int current_state = 0;
@@ -468,9 +446,8 @@ public:
   cell_t frm_;
   std::map<std::string, std::shared_ptr<SmxV1Image>> images;
   std::shared_ptr<SmxV1Image> current_image = nullptr;
-  SourcePawn::IFrameIterator *debug_iter;
-  DebuggerClient(const TcpConnectionPtr &tcp_connection)
-      : socket(tcp_connection)
+  SourcePawn::IFrameIterator* debug_iter;
+  DebuggerClient(const TcpConnectionPtr& tcp_connection) : socket(tcp_connection)
   {
   }
 
@@ -485,21 +462,18 @@ public:
     std::string what_message;
 
   public:
-    const char *
-    what() const throw()
+    const char* what() const throw()
     {
       return "Debugger exited!";
     }
   };
 
-  void
-  setBreakpoint(std::string path, int line, int id)
+  void setBreakpoint(std::string path, int line, int id)
   {
     break_list[path].insert(line);
   }
 
-  void
-  clearBreakpoints(std::string fileName)
+  void clearBreakpoints(std::string fileName)
   {
     auto found = break_list.find(fileName);
     if (found != break_list.end())
@@ -521,17 +495,16 @@ public:
 #define MAX_DIMS 3
 #define DISP_MASK 0x0f
 
-  char *
-  get_string(SmxV1Image::Symbol *sym)
+  char* get_string(SmxV1Image::Symbol* sym)
   {
     assert(sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY);
     assert(sym->dimcount() == 1);
 
     // get the starting address and the length of the string
-    cell_t *addr;
+    cell_t* addr;
     cell_t base = sym->addr();
     if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
-      base += frm_;                               // addresses of local vars are relative to the frame
+      base += frm_;                             // addresses of local vars are relative to the frame
     if (sym->ident() == sp::IDENT_REFARRAY)
     {
       context_->LocalToPhysAddr(base, &addr);
@@ -539,15 +512,15 @@ public:
       base = *addr;
     }
 
-    char *str;
+    char* str;
     if (context_->LocalToStringNULL(base, &str) != SP_ERROR_NONE)
       return nullptr;
     return str;
   }
 
-  int get_symbolvalue(const SmxV1Image::Symbol *sym, int index, cell_t *value)
+  int get_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t* value)
   {
-    cell_t *vptr;
+    cell_t* vptr;
     cell_t base = sym->addr();
     if (sym->vclass() & DISP_MASK)
       base += frm_; // addresses of local vars are relative to the frame
@@ -570,9 +543,7 @@ public:
     return vptr != nullptr;
   }
 
-  void
-  printvalue(long value, int disptype, std::string &out_value,
-             std::string &out_type)
+  void printvalue(long value, int disptype, std::string& out_value, std::string& out_type)
   {
     char out[64];
     if (disptype == DISP_FLOAT)
@@ -618,51 +589,41 @@ public:
     } /* if */
     out_value += out;
   }
-  nlohmann::json
-  read_variable(uint32_t &addr, uint32_t type_id, debug::Rtti *rtti,
-                bool is_ref = false)
+  nlohmann::json read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti, bool is_ref = false)
   {
     nlohmann::json json;
     if (!rtti)
     {
-      rtti = const_cast<debug::Rtti *>(
-          current_image->rtti_data()->typeFromTypeId(type_id));
+      rtti = const_cast<debug::Rtti*>(current_image->rtti_data()->typeFromTypeId(type_id));
     }
-    cell_t *ptr;
+    cell_t* ptr;
     switch (rtti->type())
     {
-    case cb::kAny:
-    {
+    case cb::kAny: {
       context_->LocalToPhysAddr(addr, &ptr);
       json = (int32_t)*ptr;
     }
-    case cb::kBool:
-    {
+    case cb::kBool: {
       context_->LocalToPhysAddr(addr, &ptr);
       json = (bool)*ptr;
       break;
     }
-    case cb::kInt32:
-    {
+    case cb::kInt32: {
       context_->LocalToPhysAddr(addr, &ptr);
       json = (int32_t)*ptr;
       break;
     }
-    case cb::kFloat32:
-    {
+    case cb::kFloat32: {
       context_->LocalToPhysAddr(addr, &ptr);
       json = sp_ctof(*ptr);
       break;
     }
-    case cb::kFixedArray:
-    {
+    case cb::kFixedArray: {
       if (rtti->inner())
       {
         if (rtti->inner()->type() == cb::kChar8)
         {
-          json = read_variable(
-              addr, rtti->inner()->type(),
-              const_cast<debug::Rtti *>(rtti->inner()), false);
+          json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
         }
         else
         {
@@ -670,18 +631,16 @@ public:
           {
             uint32_t start = addr;
 
-            json[i] = read_variable(
-                start, rtti->inner()->type(),
-                const_cast<debug::Rtti *>(rtti->inner()), false);
+            json[i] = read_variable(start, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()),
+              false);
             addr += 4;
           }
         }
       }
       break;
     }
-    case cb::kChar8:
-    {
-      char *str = nullptr;
+    case cb::kChar8: {
+      char* str = nullptr;
       if (context_->LocalToStringNULL(addr, &str) != SP_ERROR_NONE)
       {
         break;
@@ -697,56 +656,48 @@ public:
       json = str ? str : "";
       break;
     }
-    case cb::kArray:
-    {
+    case cb::kArray: {
       if (is_ref)
       {
-        cell_t *a;
+        cell_t* a;
         context_->LocalToPhysAddr(addr, &a);
         addr = *a;
       }
       if (rtti->inner())
       {
-        json = read_variable(addr, rtti->inner()->type(),
-                             const_cast<debug::Rtti *>(rtti->inner()));
+        json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()));
       }
       break;
     }
-    case cb::kEnumStruct:
-    {
+    case cb::kEnumStruct: {
       auto fields = current_image->getEnumFields(rtti->index());
 
       uint32_t start = addr;
 
-      for (auto &field : fields)
+      for (auto& field : fields)
       {
         auto name = current_image->GetDebugName(field->name);
-        auto rtti_field = current_image->rtti_data()->typeFromTypeId(
-            field->type_id);
+        auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
         if (!rtti_field)
         {
           break;
         }
-        json[name] = read_variable(start, rtti_field->type(),
-                                   (sp::debug::Rtti *)rtti_field);
+        json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field);
       }
       break;
     }
-    case cb::kClassdef:
-    {
+    case cb::kClassdef: {
       auto fields = current_image->getTypeFields(rtti->index());
-      cell_t *ptr;
+      cell_t* ptr;
       uint32_t field_offset = addr;
 
-      for (auto &field : fields)
+      for (auto& field : fields)
       {
         uint32_t start = field_offset;
 
         auto name = current_image->GetDebugName(field->name);
-        auto rtti_field = current_image->rtti_data()->typeFromTypeId(
-            field->type_id);
-        json[name] = read_variable(start, rtti_field->type(),
-                                   (sp::debug::Rtti *)rtti_field, true);
+        auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
+        json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field, true);
         field_offset += sizeof(cell_t);
       }
       break;
@@ -755,9 +706,7 @@ public:
 
     return json;
   }
-  variable_s
-  display_variable(SmxV1Image::Symbol *sym, uint32_t index[], int idxlevel,
-                   bool noarray = false)
+  variable_s display_variable(SmxV1Image::Symbol* sym, uint32_t index[], int idxlevel, bool noarray = false)
   {
     nlohmann::json json;
     variable_s var;
@@ -769,19 +718,18 @@ public:
     var.type = "N/A";
     var.value = "";
     cell_t value;
-    std::unique_ptr<std::vector<SmxV1Image::ArrayDim *>> symdims;
+    std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> symdims;
     assert(index != NULL);
     auto rtti = sym->rtti();
     if (rtti && rtti->type_id)
     {
       uint32_t base = static_cast<uint32_t>(rtti->address);
       if (sym->vclass() == 1 || sym->vclass() == 3) // local var or arg but not static
-        base += frm_;                               // addresses of local vars are relative to the frame
+        base += frm_;                             // addresses of local vars are relative to the frame
 
       try
       {
-        auto json = read_variable(base, rtti->type_id, nullptr,
-                                  sym->vclass() == 0x3);
+        auto json = read_variable(base, rtti->type_id, nullptr, sym->vclass() == 0x3);
         if (!json.empty())
         {
           var.value = json.dump();
@@ -803,7 +751,7 @@ public:
     // set default display type for the symbol (if none was set)
     if ((sym->vclass() & ~DISP_MASK) == 0)
     {
-      const char *tagname = current_image->GetTagName(sym->tagid());
+      const char* tagname = current_image->GetTagName(sym->tagid());
       if (tagname != nullptr)
       {
         if (!strcasecmp(tagname, "bool"))
@@ -815,12 +763,13 @@ public:
           sym->setVClass(sym->vclass() | DISP_FLOAT);
         }
       }
-      if ((sym->vclass() & ~DISP_MASK) == 0 && (sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY) && sym->dimcount() == 1)
+      if ((sym->vclass() & ~DISP_MASK) == 0 &&
+        (sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY) && sym->dimcount() == 1)
       {
         /* untagged array with a single dimension, walk through all
          * elements and check whether this could be a string
          */
-        char *ptr = get_string(sym);
+        char* ptr = get_string(sym);
         if (ptr != nullptr)
         {
           uint32_t i;
@@ -840,8 +789,7 @@ public:
     if (sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY)
     {
       int dim;
-      symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim *>>(
-          *current_image->GetArrayDimensions(sym));
+      symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
       // check whether any of the indices are out of range
       assert(symdims != nullptr);
       for (dim = 0; dim < idxlevel; dim++)
@@ -863,7 +811,7 @@ public:
       if ((sym->vclass() & ~DISP_MASK) == DISP_STRING)
       {
         var.type = "String";
-        char *str = get_string(sym);
+        char* str = get_string(sym);
         if (str != nullptr)
         {
           var.value = str;
@@ -940,8 +888,7 @@ public:
       }
 
       if (get_symbolvalue(sym, base + index[dim], &value) && sym->dimcount() == idxlevel)
-        printvalue(value, (sym->vclass() & ~DISP_MASK), var.value,
-                   var.type);
+        printvalue(value, (sym->vclass() & ~DISP_MASK), var.value, var.type);
       else if (sym->dimcount() != idxlevel)
         var.value = "(invalid number of dimensions)";
       else
@@ -950,8 +897,7 @@ public:
     return var;
   }
 
-  void
-  evaluateVar(int frame_id, char *variable)
+  void evaluateVar(int frame_id, char* variable)
   {
     if (current_state != DebugRun)
     {
@@ -977,16 +923,15 @@ public:
           buffer.PutString(var.type.c_str());
           buffer.PutInt(0);
         }
-        *(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
-        socket->send(static_cast<const char *>(buffer.Base()),
-                     static_cast<size_t>(buffer.TellPut()));
+        *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
+        socket->send(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
       }
     }
   }
 
-  int set_symbolvalue(const SmxV1Image::Symbol *sym, int index, cell_t value)
+  int set_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t value)
   {
-    cell_t *vptr;
+    cell_t* vptr;
     cell_t base = sym->addr();
     if (sym->vclass() & DISP_MASK)
       base += frm_; // addresses of local vars are relative to the frame
@@ -1005,13 +950,12 @@ public:
     return true;
   }
 
-  bool
-  SetSymbolString(const SmxV1Image::Symbol *sym, char *str)
+  bool SetSymbolString(const SmxV1Image::Symbol* sym, char* str)
   {
     assert(sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY);
     assert(sym->dimcount() == 1);
 
-    cell_t *vptr;
+    cell_t* vptr;
     cell_t base = sym->addr();
     if (sym->vclass() & DISP_MASK)
       base += frm_; // addresses of local vars are relative to the frame
@@ -1024,14 +968,12 @@ public:
       base = *vptr;
     }
 
-    std::unique_ptr<std::vector<SmxV1Image::ArrayDim *>> dims;
-    dims = std::make_unique<std::vector<SmxV1Image::ArrayDim *>>(
-        *current_image->GetArrayDimensions(sym));
+    std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> dims;
+    dims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
     return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL) == SP_ERROR_NONE;
   }
 
-  void
-  setVariable(std::string var, std::string value, int index)
+  void setVariable(std::string var, std::string value, int index)
   {
     bool success = false;
     bool valid_value = true;
@@ -1040,16 +982,14 @@ public:
       auto imagev1 = current_image.get();
       std::unique_ptr<SmxV1Image::Symbol> sym;
       cell_t result = 0;
-      value.erase(remove(value.begin(), value.end(), '\"'),
-                  value.end());
+      value.erase(remove(value.begin(), value.end(), '\"'), value.end());
       if (imagev1->GetVariable(var.c_str(), cip_, sym))
       {
         if ((sym->ident() == IDENT_ARRAY || sym->ident() == IDENT_REFARRAY))
         {
           if ((sym->vclass() & ~DISP_MASK) == DISP_STRING)
           {
-            SetSymbolString(sym.get(),
-                            const_cast<char *>(value.c_str()));
+            SetSymbolString(sym.get(), const_cast<char*>(value.c_str()));
           }
           valid_value = false;
         }
@@ -1099,13 +1039,11 @@ public:
       buffer.PutChar(MessageType::SetVariable);
       buffer.PutInt(success);
     }
-    *(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
-    socket->send(static_cast<const char *>(buffer.Base()),
-                 static_cast<size_t>(buffer.TellPut()));
+    *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
+    socket->send(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
   }
 
-  void
-  sendVariables(char *scope)
+  void sendVariables(char* scope)
   {
     bool local_scope = strstr(scope, ":%local%");
     bool global_scope = strstr(scope, ":%global%");
@@ -1129,7 +1067,9 @@ public:
             const auto sym = iter.Next();
 
             // Only variables in scope.
-            if (sym->ident() != sp::IDENT_FUNCTION && (sym->codestart() <= (uint32_t)cip_ && sym->codeend() >= (uint32_t)cip_) || global_scope)
+            if (sym->ident() != sp::IDENT_FUNCTION &&
+              (sym->codestart() <= (uint32_t)cip_ && sym->codeend() >= (uint32_t)cip_) ||
+              global_scope)
             {
               auto var = display_variable(sym, idx, dim);
               if (local_scope)
@@ -1159,7 +1099,7 @@ public:
             int i = 0;
             for (auto val : values)
             {
-              vars.push_back({std::to_string(i), val, var.type});
+              vars.push_back({ std::to_string(i), val, var.type });
               i++;
             }
           }
@@ -1181,15 +1121,13 @@ public:
           buffer.PutString(var.type.c_str());
           buffer.PutInt(0);
         }
-        *(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
-        socket->send(static_cast<const char *>(buffer.Base()),
-                     static_cast<size_t>(buffer.TellPut()));
+        *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
+        socket->send(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
       }
     }
   }
 
-  void
-  CallStack()
+  void CallStack()
   {
     std::vector<call_stack_s> callStack;
     if (current_state == DebugException)
@@ -1201,18 +1139,13 @@ public:
         {
           if (debug_iter->IsNativeFrame())
           {
-            callStack.push_back(
-                {0, debug_iter->FunctionName(), "native"});
+            callStack.push_back({ 0, debug_iter->FunctionName(), "native" });
           }
           else if (debug_iter->IsScriptedFrame())
           {
-            auto current_file = std::filesystem::path(debug_iter->FilePath())
-                                    .filename()
-                                    .string();
+            auto current_file = std::filesystem::path(debug_iter->FilePath()).filename().string();
             lowercase(current_file);
-            callStack.push_back({debug_iter->LineNumber() - 1,
-                                 debug_iter->FunctionName(),
-                                 current_file});
+            callStack.push_back({ debug_iter->LineNumber() - 1, debug_iter->FunctionName(), current_file });
           }
         }
       }
@@ -1220,14 +1153,14 @@ public:
     }
     else if (current_state != DebugRun)
     {
-      IFrameIterator *iter = context_->CreateFrameIterator();
+      IFrameIterator* iter = context_->CreateFrameIterator();
 
       uint32_t index = 0;
       for (; !iter->Done(); iter->Next(), index++)
       {
         if (iter->IsNativeFrame())
         {
-          callStack.push_back({0, iter->FunctionName(), ""});
+          callStack.push_back({ 0, iter->FunctionName(), "" });
         }
         else if (iter->IsScriptedFrame())
         {
@@ -1240,8 +1173,7 @@ public:
               break;
             }
           }
-          callStack.push_back({iter->LineNumber() - 1,
-                               iter->FunctionName(), current_file});
+          callStack.push_back({ iter->LineNumber() - 1, iter->FunctionName(), current_file });
         }
       }
       context_->DestroyFrameIterator(iter);
@@ -1261,13 +1193,11 @@ public:
         buffer.PutInt(stack.line + 1);
       }
     }
-    *(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
-    socket->send(static_cast<const char *>(buffer.Base()),
-                 static_cast<size_t>(buffer.TellPut()));
+    *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
+    socket->send(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
   }
 
-  void
-  WaitWalkCmd(std::string reason = "Breakpoint", std::string text = "N/A")
+  void WaitWalkCmd(std::string reason = "Breakpoint", std::string text = "N/A")
   {
     if (!receive_walk_cmd)
     {
@@ -1283,13 +1213,11 @@ public:
           buffer.PutInt(text.size() + 1);
           buffer.PutString(text.c_str());
         }
-        *(uint32_t *)buffer.Base() = buffer.TellPut() - 5;
+        *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
       }
-      socket->send(static_cast<const char *>(buffer.Base()),
-                   static_cast<size_t>(buffer.TellPut()));
+      socket->send(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
       std::unique_lock<std::mutex> lck(mtx);
-      cv.wait(lck, [this]
-              { return receive_walk_cmd; });
+      cv.wait(lck, [this] { return receive_walk_cmd; });
     }
     if (current_state == DebugDead)
     {
@@ -1298,8 +1226,7 @@ public:
     }
   }
 
-  void
-  ReportError(const IErrorReport &report, IFrameIterator &iter)
+  void ReportError(const IErrorReport& report, IFrameIterator& iter)
   {
     receive_walk_cmd = false;
     current_state = DebugException;
@@ -1307,17 +1234,16 @@ public:
     debug_iter = &iter;
     WaitWalkCmd("exception", report.Message());
   }
-  int(DebugHook)(SourcePawn::IPluginContext *ctx,
-                 sp_debug_break_info_t &BreakInfo)
+  int(DebugHook)(SourcePawn::IPluginContext* ctx, sp_debug_break_info_t& BreakInfo)
   {
     std::string filename = ctx->GetRuntime()->GetFilename();
     auto image = images.find(filename);
     if (image == images.end())
     {
-      FILE *fp = fopen(filename.c_str(), "rb");
+      FILE* fp = fopen(filename.c_str(), "rb");
       current_image = std::make_shared<SmxV1Image>(fp);
       current_image->validate();
-      images.insert({filename, current_image});
+      images.insert({ filename, current_image });
       fclose(fp);
     }
     else
@@ -1334,7 +1260,7 @@ public:
     frm_ = BreakInfo.frm;
     receive_walk_cmd = false;
 
-    IFrameIterator *iter = context_->CreateFrameIterator();
+    IFrameIterator* iter = context_->CreateFrameIterator();
     std::string current_file = "N/A";
     uint32_t index = 0;
     for (; !iter->Done(); iter->Next(), index++)
@@ -1346,9 +1272,7 @@ public:
 
       if (iter->IsScriptedFrame())
       {
-        current_file = std::filesystem::path(iter->FilePath())
-                           .filename()
-                           .string();
+        current_file = std::filesystem::path(iter->FilePath()).filename().string();
         lowercase(current_file);
 
         for (auto file : files)
@@ -1413,21 +1337,18 @@ public:
     return current_state;
   }
 
-  void
-  SwitchState(unsigned char state)
+  void SwitchState(unsigned char state)
   {
     current_state = state;
     receive_walk_cmd = true;
     cv.notify_one();
   }
 
-  void
-  AskFile()
+  void AskFile()
   {
   }
 
-  void
-  RecvDebugFile(CUtlBuffer *buf)
+  void RecvDebugFile(CUtlBuffer* buf)
   {
     char file[260];
     int strlen = buf->GetInt();
@@ -1437,21 +1358,18 @@ public:
     files.insert(filename);
   }
 
-  void
-  RecvStateSwitch(CUtlBuffer *buf)
+  void RecvStateSwitch(CUtlBuffer* buf)
   {
     auto CurrentState = buf->GetUnsignedChar();
     SwitchState(CurrentState);
   }
 
-  void
-  RecvCallStack(CUtlBuffer *buf)
+  void RecvCallStack(CUtlBuffer* buf)
   {
     CallStack();
   }
 
-  void
-  recvRequestVariables(CUtlBuffer *buf)
+  void recvRequestVariables(CUtlBuffer* buf)
   {
     char scope[256];
     int strlen = buf->GetInt();
@@ -1459,8 +1377,7 @@ public:
     sendVariables(scope);
   }
 
-  void
-  recvRequestEvaluate(CUtlBuffer *buf)
+  void recvRequestEvaluate(CUtlBuffer* buf)
   {
     int frameId;
     char variable[256];
@@ -1470,14 +1387,12 @@ public:
     evaluateVar(frameId, variable);
   }
 
-  void
-  recvDisconnect(CUtlBuffer *buf)
+  void recvDisconnect(CUtlBuffer* buf)
   {
     removeClientID(socket);
   }
 
-  void
-  recvBreakpoint(CUtlBuffer *buf)
+  void recvBreakpoint(CUtlBuffer* buf)
   {
     char path[256];
     int strlen = buf->GetInt();
@@ -1490,8 +1405,7 @@ public:
     setBreakpoint(filename, line, id);
   }
 
-  void
-  recvClearBreakpoints(CUtlBuffer *buf)
+  void recvClearBreakpoints(CUtlBuffer* buf)
   {
     char path[256];
     int strlen = buf->GetInt();
@@ -1502,26 +1416,22 @@ public:
     clearBreakpoints(filename);
   }
 
-  void
-  stopDebugging()
+  void stopDebugging()
   {
     current_state = DebugDead;
     receive_walk_cmd = true;
     cv.notify_one();
     std::unique_lock<std::mutex> lck(mtx);
-    cv.wait(lck, [this]
-            { return unload; });
+    cv.wait(lck, [this] { return unload; });
   }
 
-  void
-  recvStopDebugging(CUtlBuffer *buf)
+  void recvStopDebugging(CUtlBuffer* buf)
   {
     stopDebugging();
     removeClientID(socket);
   }
 
-  void
-  recvRequestSetVariable(CUtlBuffer *buf)
+  void recvRequestSetVariable(CUtlBuffer* buf)
   {
     char var[256];
     int strlen = buf->GetInt();
@@ -1533,83 +1443,68 @@ public:
     setVariable(var, value, index);
   }
 
-  void
-  RecvCmd(const char *buffer, size_t len)
+  void RecvCmd(const char* buffer, size_t len)
   {
-    CUtlBuffer buf((void *)buffer, len);
+    CUtlBuffer buf((void*)buffer, len);
     while (buf.TellGet() < len)
     {
       int msg_len = buf.GetUnsignedInt();
       int type = buf.GetUnsignedChar();
       switch (type)
       {
-      case RequestFile:
-      {
+      case RequestFile: {
         RecvDebugFile(&buf);
         break;
       }
-      case Pause:
-      {
+      case Pause: {
         RecvStateSwitch(&buf);
         break;
       }
-      case Continue:
-      {
+      case Continue: {
         RecvStateSwitch(&buf);
         break;
       }
-      case StepIn:
-      {
+      case StepIn: {
         RecvStateSwitch(&buf);
         break;
       }
-      case StepOver:
-      {
+      case StepOver: {
         RecvStateSwitch(&buf);
         break;
       }
-      case StepOut:
-      {
+      case StepOut: {
         RecvStateSwitch(&buf);
         break;
       }
-      case RequestCallStack:
-      {
+      case RequestCallStack: {
         RecvCallStack(&buf);
         break;
       }
-      case RequestVariables:
-      {
+      case RequestVariables: {
         recvRequestVariables(&buf);
         break;
       }
-      case RequestEvaluate:
-      {
+      case RequestEvaluate: {
         recvRequestEvaluate(&buf);
         break;
       }
-      case Disconnect:
-      {
+      case Disconnect: {
         recvDisconnect(&buf);
         break;
       }
-      case ClearBreakpoints:
-      {
+      case ClearBreakpoints: {
         recvClearBreakpoints(&buf);
         break;
       }
-      case SetBreakpoint:
-      {
+      case SetBreakpoint: {
         recvBreakpoint(&buf);
         break;
       }
-      case StopDebugging:
-      {
+      case StopDebugging: {
         recvStopDebugging(&buf);
         break;
       }
-      case RequestSetVariable:
-      {
+      case RequestSetVariable: {
         recvRequestSetVariable(&buf);
         break;
       }
@@ -1620,7 +1515,7 @@ public:
 
 std::vector<std::unique_ptr<DebuggerClient>> clients;
 
-void addClientID(const TcpConnectionPtr &session)
+void addClientID(const TcpConnectionPtr& session)
 {
   // Adicionar logging para debug
   fmt::print(stderr, "Attempting to add client ID...\n");
@@ -1629,25 +1524,21 @@ void addClientID(const TcpConnectionPtr &session)
   try
   {
     if (auto it = std::find_if(clients.begin(), clients.end(),
-                               [&session](const auto &client)
-                               {
-                                 return client->socket == session;
-                               });
-        it == clients.end())
+      [&session](const auto& client) { return client->socket == session; });
+      it == clients.end())
     {
       fmt::print(stderr, "Client not found, adding new client...\n");
       fflush(stderr);
 
       // Adicione mais detalhes sobre o cliente - use fmt::format
       // corretamente
-      fmt::print(stderr, "Client pointer: {}\n", (void *)session.get());
+      fmt::print(stderr, "Client pointer: {}\n", (void*)session.get());
 
       clients.push_back(std::make_unique<DebuggerClient>(session));
       clients.back()->AskFile();
 
       // Verifique se o cliente foi adicionado corretamente
-      fmt::print(stderr, "Client added successfully. Total clients: {}\n",
-                 clients.size());
+      fmt::print(stderr, "Client added successfully. Total clients: {}\n", clients.size());
       fflush(stderr);
     }
     else
@@ -1656,25 +1547,22 @@ void addClientID(const TcpConnectionPtr &session)
       fflush(stderr);
     }
   }
-  catch (const std::exception &e)
+  catch (const std::exception& e)
   {
     fmt::print(stderr, "Exception during client addition: {}\n", e.what());
     fflush(stderr);
   }
 }
 
-void removeClientID(const TcpConnectionPtr &session)
+void removeClientID(const TcpConnectionPtr& session)
 {
   // Adicionar logging para debug
   fmt::print(stderr, "Attempting to remove client ID...\n");
   fflush(stderr);
 
   if (auto it = std::find_if(clients.begin(), clients.end(),
-                             [&session](const auto &client)
-                             {
-                               return client->socket == session;
-                             });
-      it != clients.end())
+    [&session](const auto& client) { return client->socket == session; });
+    it != clients.end())
   {
     fmt::print(stderr, "Client found, removing...\n");
     fflush(stderr);
@@ -1706,20 +1594,21 @@ namespace DebugProtocol
 
   // Indica que qualquer pacote de tamanho 5 deve ser tratado como DISCONNECT
   constexpr size_t DISCONNECT_PACKET_SIZE = 5;
-}
+} // namespace DebugProtocol
 
 class DebugProtocolHandler
 {
 private:
   // Referência para o logger
-  std::function<void(const std::string &)> logMessage;
+  std::function<void(const std::string&)> logMessage;
 
 public:
-  DebugProtocolHandler(std::function<void(const std::string &)> logger)
-      : logMessage(std::move(logger)) {}
+  DebugProtocolHandler(std::function<void(const std::string&)> logger) : logMessage(std::move(logger))
+  {
+  }
 
   // Processa um comando e retorna o tipo de comando detectado
-  uint8_t processCommand(const char *data, size_t length)
+  uint8_t processCommand(const char* data, size_t length)
   {
     if (length == 0)
     {
@@ -1751,7 +1640,7 @@ public:
   }
 
   // Método específico para processar comando de conexão
-  bool handleConnectCommand(const char *data, size_t length, const std::shared_ptr<TcpSession> &session)
+  bool handleConnectCommand(const char* data, size_t length, const std::shared_ptr<TcpSession>& session)
   {
     if (length < 1 || static_cast<uint8_t>(data[0]) != DebugProtocol::CMD_CONNECT)
     {
@@ -1771,20 +1660,19 @@ public:
 
     // Responder ao cliente confirmando a conexão
     // Exemplo de resposta
-    const char response[] = {static_cast<char>(DebugProtocol::CMD_CONNECT), 0x01}; // 0x01 indica sucesso
+    const char response[] = { static_cast<char>(DebugProtocol::CMD_CONNECT), 0x01 }; // 0x01 indica sucesso
     session->send(response, sizeof(response));
 
     return true;
   }
 
   // Método específico para processar comando de desconexão
-  bool handleDisconnectCommand(const char *data, size_t length, const std::shared_ptr<TcpSession> &session)
+  bool handleDisconnectCommand(const char* data, size_t length, const std::shared_ptr<TcpSession>& session)
   {
     // Aceita tanto o comando específico quanto pacotes de tamanho 5
     if ((length >= 1 && static_cast<uint8_t>(data[0]) == DebugProtocol::CMD_DISCONNECT) ||
-        (length == DebugProtocol::DISCONNECT_PACKET_SIZE))
+      (length == DebugProtocol::DISCONNECT_PACKET_SIZE))
     {
-
       logMessage("Processando comando de desconexão");
 
       // Log de todos os bytes do pacote para depuração
@@ -1796,7 +1684,7 @@ public:
       logMessage(bytesLog);
 
       // Confirmar a desconexão ao cliente antes de finalizar
-      const char response[] = {static_cast<char>(DebugProtocol::CMD_DISCONNECT), 0x01}; // 0x01 indica sucesso
+      const char response[] = { static_cast<char>(DebugProtocol::CMD_DISCONNECT), 0x01 }; // 0x01 indica sucesso
       session->send(response, sizeof(response));
 
       // Retornar true para indicar que o cliente deve ser desconectado
@@ -1809,17 +1697,14 @@ public:
 
 // Exemplo de como integrar o manipulador de protocolo no thread de debug
 
-void clientHandlerExample(
-    std::shared_ptr<TcpSession> session,
-    const std::function<void(const std::shared_ptr<TcpSession> &)> &markClientActive,
-    const std::function<void(const std::shared_ptr<TcpSession> &)> &safeRemoveClient)
+void clientHandlerExample(std::shared_ptr<TcpSession> session,
+  const std::function<void(const std::shared_ptr<TcpSession>&)>& markClientActive,
+  const std::function<void(const std::shared_ptr<TcpSession>&)>& safeRemoveClient)
 {
-
-  auto logMessage = [](const std::string &message)
-  {
+  auto logMessage = [](const std::string& message) {
     fmt::print(stderr, "[DEBUG] {}\n", message);
     fflush(stderr);
-  };
+    };
 
   // Criar o manipulador de protocolo
   auto protocolHandler = std::make_shared<DebugProtocolHandler>(logMessage);
@@ -1827,65 +1712,63 @@ void clientHandlerExample(
   // Modificar o callback de dados para usar o manipulador de protocolo
   // Isso seria parte do código em debugThread()
   session->set_data_callback(
-      [session, markClientActive, safeRemoveClient, logMessage, protocolHandler](
-          const char *data, size_t length)
+    [session, markClientActive, safeRemoveClient, logMessage, protocolHandler](const char* data, size_t length) {
+      markClientActive(session);
+
+      // Processar o comando usando o manipulador de protocolo
+      uint8_t commandType = protocolHandler->processCommand(data, length);
+
+      // Tratar comandos específicos
+      if (commandType == DebugProtocol::CMD_CONNECT)
       {
-        markClientActive(session);
-
-        // Processar o comando usando o manipulador de protocolo
-        uint8_t commandType = protocolHandler->processCommand(data, length);
-
-        // Tratar comandos específicos
-        if (commandType == DebugProtocol::CMD_CONNECT)
+        protocolHandler->handleConnectCommand(data, length, session);
+      }
+      else if (commandType == DebugProtocol::CMD_DISCONNECT)
+      {
+        if (protocolHandler->handleDisconnectCommand(data, length, session))
         {
-          protocolHandler->handleConnectCommand(data, length, session);
-        }
-        else if (commandType == DebugProtocol::CMD_DISCONNECT)
-        {
-          if (protocolHandler->handleDisconnectCommand(data, length, session))
-          {
-            // Se o comando de desconexão foi processado com sucesso, remover o cliente
-            safeRemoveClient(session);
-            return;
-          }
-        }
-
-        // Continuar com o processamento normal de comandos para o cliente
-        bool clientFound = false;
-        for (const auto &client : clients)
-        {
-          if (client->socket == session)
-          {
-            clientFound = true;
-            try
-            {
-              client->RecvCmd(data, length);
-            }
-            catch (const std::exception &e)
-            {
-              logMessage(fmt::format("Error processing client data: {}", e.what()));
-              client->stopDebugging();
-              safeRemoveClient(session);
-            }
-            break;
-          }
-        }
-
-        if (!clientFound)
-        {
-          logMessage("Client not found for data callback");
+          // Se o comando de desconexão foi processado com sucesso, remover o
+          // cliente
           safeRemoveClient(session);
+          return;
         }
-      });
+      }
+
+      // Continuar com o processamento normal de comandos para o cliente
+      bool clientFound = false;
+      for (const auto& client : clients)
+      {
+        if (client->socket == session)
+        {
+          clientFound = true;
+          try
+          {
+            client->RecvCmd(data, length);
+          }
+          catch (const std::exception& e)
+          {
+            logMessage(fmt::format("Error processing client data: {}", e.what()));
+            client->stopDebugging();
+            safeRemoveClient(session);
+          }
+          break;
+        }
+      }
+
+      if (!clientFound)
+      {
+        logMessage("Client not found for data callback");
+        safeRemoveClient(session);
+      }
+    });
 }
 
 void debugThread()
 {
-  auto logMessage = [](const std::string &message)
-  {
+  auto logMessage = [](const std::string& message) {
     fmt::print(stderr, "[DEBUG] {}\n", message);
     fflush(stderr);
-  };
+    };
 
   try
   {
@@ -1903,27 +1786,23 @@ void debugThread()
     std::mutex clientsMutex;
 
     // Lambda para remover cliente de forma segura
-    auto safeRemoveClient = [&activeClients, &clientsMutex, &logMessage](
-                                const std::shared_ptr<TcpSession> &session)
-    {
+    auto safeRemoveClient = [&activeClients, &clientsMutex,
+      &logMessage](const std::shared_ptr<TcpSession>& session) {
       std::unique_lock<std::mutex> lock(clientsMutex);
 
       logMessage(fmt::format("Removing client. Current clients count: {}", activeClients.size()));
 
-      auto it = std::find_if(
-          activeClients.begin(),
-          activeClients.end(),
-          [&session](const auto &client)
-          { return client.session == session; });
+      auto it = std::find_if(activeClients.begin(), activeClients.end(),
+        [&session](const auto& client) { return client.session == session; });
 
       if (it != activeClients.end())
       {
-        // Primeira para o debugger do cliente - CORRIGIDO: verificar se clients está definido
+        // Primeira para o debugger do cliente - CORRIGIDO: verificar se clients
+        // está definido
         if (!clients.empty()) // Adicionar esta verificação
         {
-          auto clientIt = std::find_if(
-              clients.begin(), clients.end(), [&session](const auto &client)
-              { return client->socket == session; });
+          auto clientIt = std::find_if(clients.begin(), clients.end(),
+            [&session](const auto& client) { return client->socket == session; });
 
           if (clientIt != clients.end())
           {
@@ -1935,7 +1814,8 @@ void debugThread()
             logMessage("Client not found in global list");
           }
 
-          // Remove o cliente da lista global - CORRIGIDO: somente se estiver presente
+          // Remove o cliente da lista global - CORRIGIDO: somente se estiver
+          // presente
           if (clientIt != clients.end())
           {
             removeClientID(session);
@@ -1952,18 +1832,14 @@ void debugThread()
       {
         logMessage("Client not found in active clients list");
       }
-    };
+      };
 
     // Lambda para marcar cliente como ativo
-    auto markClientActive = [&activeClients, &clientsMutex, &logMessage](
-                                const std::shared_ptr<TcpSession> &session)
-    {
+    auto markClientActive = [&activeClients, &clientsMutex,
+      &logMessage](const std::shared_ptr<TcpSession>& session) {
       std::unique_lock<std::mutex> lock(clientsMutex);
-      auto it = std::find_if(
-          activeClients.begin(),
-          activeClients.end(),
-          [&session](auto &client)
-          { return client.session == session; });
+      auto it = std::find_if(activeClients.begin(), activeClients.end(),
+        [&session](auto& client) { return client.session == session; });
 
       if (it != activeClients.end())
       {
@@ -1975,19 +1851,14 @@ void debugThread()
       {
         logMessage(fmt::format("Client not found when marking as active"));
       }
-    };
+      };
 
     // Timer para verificar clientes inativos
     auto checkTimer = std::make_shared<asio::steady_timer>(io_context);
 
     std::function<void()> checkInactiveClients;
-    checkInactiveClients = [&activeClients,
-                            &clientsMutex,
-                            &checkTimer,
-                            &safeRemoveClient,
-                            &checkInactiveClients,
-                            &logMessage]()
-    {
+    checkInactiveClients = [&activeClients, &clientsMutex, &checkTimer, &safeRemoveClient, &checkInactiveClients,
+      &logMessage]() {
       auto now = std::chrono::steady_clock::now();
       std::vector<std::shared_ptr<TcpSession>> clientsToRemove;
 
@@ -1995,44 +1866,38 @@ void debugThread()
         std::unique_lock<std::mutex> lock(clientsMutex);
         logMessage(fmt::format("Checking inactive clients. Total clients: {}", activeClients.size()));
 
-        for (const auto &client : activeClients)
+        for (const auto& client : activeClients)
         {
-          auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                             now - client.lastActivity)
-                             .count();
+          auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - client.lastActivity).count();
           if (elapsed > 10)
           {
-            logMessage(fmt::format(
-                "Client inactive for {} seconds, marking for removal", elapsed));
+            logMessage(fmt::format("Client inactive for {} seconds, marking for removal", elapsed));
             clientsToRemove.push_back(client.session);
           }
         }
       }
 
-      for (const auto &client : clientsToRemove)
+      for (const auto& client : clientsToRemove)
       {
         safeRemoveClient(client);
       }
 
       checkTimer->expires_after(std::chrono::seconds(5));
-      checkTimer->async_wait(
-          [&checkInactiveClients, &logMessage](const std::error_code &ec)
-          {
-            if (!ec)
-            {
-              checkInactiveClients();
-            }
-            else
-            {
-              logMessage(fmt::format("Timer error: {}", ec.message()));
-            }
-          });
-    };
+      checkTimer->async_wait([&checkInactiveClients, &logMessage](const std::error_code& ec) {
+        if (!ec)
+        {
+          checkInactiveClients();
+        }
+        else
+        {
+          logMessage(fmt::format("Timer error: {}", ec.message()));
+        }
+        });
+      };
 
     // Inicia o timer de verificação
     checkTimer->expires_after(std::chrono::seconds(5));
-    checkTimer->async_wait([&checkInactiveClients, &logMessage](const std::error_code &ec)
-                           {
+    checkTimer->async_wait([&checkInactiveClients, &logMessage](const std::error_code& ec) {
       if (!ec)
       {
         checkInactiveClients();
@@ -2040,15 +1905,14 @@ void debugThread()
       else
       {
         logMessage(fmt::format("Initial timer error: {}", ec.message()));
-      } });
+      }
+      });
 
     // Configura e inicia o acceptor
-    tcp::acceptor acceptor(io_context,
-                           tcp::endpoint(tcp::v4(), SM_Debugger_port()));
+    tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), SM_Debugger_port()));
     acceptor.set_option(tcp::acceptor::reuse_address(true));
 
-    logMessage(
-        fmt::format("Debugger listening on port {}", SM_Debugger_port()));
+    logMessage(fmt::format("Debugger listening on port {}", SM_Debugger_port()));
 
     // Loop principal de aceitação de conexões
     while (true)
@@ -2064,82 +1928,77 @@ void debugThread()
 
         {
           std::unique_lock<std::mutex> lock(clientsMutex);
-          activeClients.push_back(
-              {session, std::chrono::steady_clock::now(), true});
+          activeClients.push_back({ session, std::chrono::steady_clock::now(), true });
         }
 
         logMessage(fmt::format("New client accepted. Total active clients: {}", activeClients.size()));
 
         // Configura o callback de desconexão
-        session->set_disconnect_callback(
-            [session, safeRemoveClient, logMessage]()
-            {
-              logMessage("Client disconnect callback triggered");
-              safeRemoveClient(session);
-            });
+        session->set_disconnect_callback([session, safeRemoveClient, logMessage]() {
+          logMessage("Client disconnect callback triggered");
+          safeRemoveClient(session);
+          });
 
         // Configura o callback de dados
         session->set_data_callback(
-            [session, markClientActive, safeRemoveClient, logMessage](
-                const char *data, size_t length)
+          [session, markClientActive, safeRemoveClient, logMessage](const char* data, size_t length) {
+            markClientActive(session);
+
+            // Log detalhado do pacote recebido
+            std::string hexDump = fmt::format("[PACKET] Tamanho: {} bytes | HexDump: ", length);
+            if (length > 0)
             {
-              markClientActive(session);
-
-              // Log detalhado do pacote recebido
-              std::string hexDump = fmt::format("[PACKET] Tamanho: {} bytes | HexDump: ", length);
-              if (length > 0)
+              for (size_t i = 0; i < length; ++i)
               {
-                for (size_t i = 0; i < length; ++i)
+                hexDump += fmt::format("{:02x} ", static_cast<unsigned char>(data[i]));
+              }
+            }
+            else
+            {
+              hexDump += "<pacote vazio>";
+            }
+            logMessage(hexDump);
+
+            // Se for pacote de desconexão (5 bytes), mostrar aviso específico
+            if (length == 5)
+            {
+              logMessage("Detectado pacote de DISCONNECT (5 bytes)");
+              safeRemoveClient(session);
+              return;
+            }
+
+            // Processar dados do cliente
+            bool clientFound = false;
+            if (!clients.empty())
+            {
+              for (const auto& client : clients)
+              {
+                if (client && client->socket == session)
                 {
-                  hexDump += fmt::format("{:02x} ", static_cast<unsigned char>(data[i]));
-                }
-              }
-              else
-              {
-                hexDump += "<pacote vazio>";
-              }
-              logMessage(hexDump);
-
-              // Se for pacote de desconexão (5 bytes), mostrar aviso específico
-              if (length == 5)
-              {
-                logMessage("Detectado pacote de DISCONNECT (5 bytes)");
-                safeRemoveClient(session);
-                return;
-              }
-
-              // Processar dados do cliente
-              bool clientFound = false;
-              if (!clients.empty())
-              {
-                for (const auto &client : clients)
-                {
-                  if (client && client->socket == session)
+                  clientFound = true;
+                  try
                   {
-                    clientFound = true;
-                    try
-                    {
-                      logMessage("Processando comando para cliente");
-                      client->RecvCmd(data, length);
-                      logMessage("Comando processado com sucesso");
-                    }
-                    catch (const std::exception &e)
-                    {
-                      logMessage(fmt::format("Erro processando dados do cliente: {}", e.what()));
-                      client->stopDebugging();
-                      safeRemoveClient(session);
-                    }
-                    break;
+                    logMessage("Processando comando para cliente");
+                    client->RecvCmd(data, length);
+                    logMessage("Comando processado com sucesso");
                   }
+                  catch (const std::exception& e)
+                  {
+                    logMessage(fmt::format("Erro processando dados do cliente: {}", e.what()));
+                    client->stopDebugging();
+                    safeRemoveClient(session);
+                  }
+                  break;
                 }
               }
+            }
 
-              if (!clientFound)
-              {
-                logMessage("Cliente não encontrado para callback de dados");
-                safeRemoveClient(session);
-              }
-            });
+            if (!clientFound)
+            {
+              logMessage("Cliente não encontrado para callback de dados");
+              safeRemoveClient(session);
+            }
+          });
 
         try
         {
@@ -2148,13 +2007,13 @@ void debugThread()
           session->start();
           logMessage("Session started successfully");
         }
-        catch (const std::exception &e)
+        catch (const std::exception& e)
         {
           logMessage(fmt::format("Error initializing client: {}", e.what()));
           safeRemoveClient(session);
         }
       }
-      catch (const std::exception &e)
+      catch (const std::exception& e)
       {
         logMessage(fmt::format("Error accepting connection: {}", e.what()));
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -2163,7 +2022,7 @@ void debugThread()
 
     io_context.run();
   }
-  catch (const std::exception &e)
+  catch (const std::exception& e)
   {
     logMessage(fmt::format("Fatal error in debug thread: {}", e.what()));
   }
@@ -2175,7 +2034,7 @@ void debugThread()
  * @param msg    Message text.
  * @param fmt    Message formatting arguments (printf-style).
  */
-void DebugReport::OnDebugSpew(const char *msg, ...)
+void DebugReport::OnDebugSpew(const char* msg, ...)
 {
   va_list ap;
   char buffer[512];
@@ -2193,7 +2052,7 @@ void DebugReport::OnDebugSpew(const char *msg, ...)
  * @param report  Error report object.
  * @param iter      Stack frame iterator.
  */
-void DebugReport::ReportError(const IErrorReport &report, IFrameIterator &iter)
+void DebugReport::ReportError(const IErrorReport& report, IFrameIterator& iter)
 {
   if (!clients.empty())
   {
@@ -2202,7 +2061,7 @@ void DebugReport::ReportError(const IErrorReport &report, IFrameIterator &iter)
     {
       auto found = false;
       /* first search already found attached hook */
-      for (auto &client : clients)
+      for (auto& client : clients)
       {
         if (client && client->context_ == iter.Context())
         {
@@ -2216,21 +2075,14 @@ void DebugReport::ReportError(const IErrorReport &report, IFrameIterator &iter)
        * current file */
       if (!found)
       {
-        for (int i = 0; i < report.Context()
-                                ->GetRuntime()
-                                ->GetDebugInfo()
-                                ->NumFiles();
-             i++)
+        for (int i = 0; i < report.Context()->GetRuntime()->GetDebugInfo()->NumFiles(); i++)
         {
-          auto filename = std::string(report.Context()
-                                          ->GetRuntime()
-                                          ->GetDebugInfo()
-                                          ->GetFileName(i));
+          auto filename = std::string(report.Context()->GetRuntime()->GetDebugInfo()->GetFileName(i));
 
           auto current_file = std::filesystem::path(filename).filename().string();
           lowercase(current_file);
 
-          for (auto &client : clients)
+          for (auto& client : clients)
           {
             if (client->files.find(current_file) != client->files.end())
             {
@@ -2251,9 +2103,9 @@ void DebugReport::ReportError(const IErrorReport &report, IFrameIterator &iter)
   original->ReportError(report, iter);
 }
 
-void(DebugHandler)(SourcePawn::IPluginContext *IPlugin,
-                   sp_debug_break_info_t &BreakInfo,
-                   const SourcePawn::IErrorReport *IErrorReport)
+void(DebugHandler)(SourcePawn::IPluginContext* IPlugin, sp_debug_break_info_t& BreakInfo,
+  const SourcePawn::IErrorReport* IErrorReport)
+
 {
   if (!IPlugin->IsDebugging())
     return;
@@ -2263,14 +2115,14 @@ void(DebugHandler)(SourcePawn::IPluginContext *IPlugin,
     /* first search already found attached hook */
     for (auto it = clients.begin(); it != clients.end(); ++it)
     {
-      const auto &client = *it;
+      const auto& client = *it;
       if (client && client->context_ == IPlugin)
       {
         try
         {
           client->DebugHook(IPlugin, BreakInfo);
         }
-        catch (DebuggerClient::debugger_stopped &ex)
+        catch (DebuggerClient::debugger_stopped& ex)
         {
           // it = clients.begin();
           // continue;
@@ -2279,8 +2131,7 @@ void(DebugHandler)(SourcePawn::IPluginContext *IPlugin,
       }
     }
 
-    for (int i = 0; i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles();
-         i++)
+    for (int i = 0; i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles(); i++)
     {
       auto filename = IPlugin->GetRuntime()->GetDebugInfo()->GetFileName(i);
       auto current_file = std::filesystem::path(filename).filename().string();
@@ -2288,14 +2139,14 @@ void(DebugHandler)(SourcePawn::IPluginContext *IPlugin,
 
       for (auto it = clients.begin(); it != clients.end(); ++it)
       {
-        const auto &client = *it;
+        const auto& client = *it;
         if (client->files.find(current_file) != client->files.end())
         {
           try
           {
             client->DebugHook(IPlugin, BreakInfo);
           }
-          catch (DebuggerClient::debugger_stopped &ex)
+          catch (DebuggerClient::debugger_stopped& ex)
           {
             return;
           }
