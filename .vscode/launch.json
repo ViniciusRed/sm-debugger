@@ -21,6 +21,21 @@
 			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ]
 		},
 		{
+			"type": "cppdbg",
+			"request": "attach",
+			"name": "Debug SourceMod Extension (.so)",
+			"program": "${workspaceFolder}/build/sm_debugger.ext.so",
+			"processId": "${command:pickProcess}",
+			"MIMode": "gdb",
+			"setupCommands": [
+			{
+				"description": "Enable pretty-printing for gdb",
+				"text": "-enable-pretty-printing",
+				"ignoreFailures": true
+			}
+			]
+		},
+		{
 			"type": "node",
 			"request": "launch",
 			"name": "Tests",

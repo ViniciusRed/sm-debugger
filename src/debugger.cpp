@@ -285,117 +285,165 @@ public:
         out_value += out;
     }
     nlohmann::json
-    read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti,
-        bool is_ref = false)
+    read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti, bool is_ref = false) 
     {
         nlohmann::json json;
-        if (!rtti) {
-            rtti = const_cast<debug::Rtti*>(
-                current_image->rtti_data()->typeFromTypeId(type_id));
-        }
-        cell_t* ptr;
-        switch (rtti->type()) {
-        case cb::kAny: {
-            context_->LocalToPhysAddr(addr, &ptr);
-            json = (int32_t)*ptr;
-        }
-        case cb::kBool: {
-            context_->LocalToPhysAddr(addr, &ptr);
-            json = (bool)*ptr;
-            break;
-        }
-        case cb::kInt32: {
-            context_->LocalToPhysAddr(addr, &ptr);
-            json = (int32_t)*ptr;
-            break;
-        }
-        case cb::kFloat32: {
-            context_->LocalToPhysAddr(addr, &ptr);
-            json = sp_ctof(*ptr);
-            break;
-        }
-        case cb::kFixedArray: {
-            if (rtti->inner()) {
-                if (rtti->inner()->type() == cb::kChar8) {
-                    json = read_variable(
-                        addr, rtti->inner()->type(),
-                        const_cast<debug::Rtti*>(rtti->inner()), false);
-                } else {
-                    for (int i = 0; i < rtti->index(); i++) {
-                        uint32_t start = addr;
-
-                        json[i] = read_variable(
-                            start, rtti->inner()->type(),
-                            const_cast<debug::Rtti*>(rtti->inner()), false);
-                        addr += 4;
-                    }
+        
+        try {
+            // Verifica e obtém o RTTI se necessário
+            if (!rtti && type_id != 0) {
+                rtti = const_cast<debug::Rtti*>(
+                    current_image->rtti_data()->typeFromTypeId(type_id));
+                if (!rtti) {
+                    return json;
                 }
             }
-            break;
-        }
-        case cb::kChar8: {
-            char* str = nullptr;
-            if (context_->LocalToStringNULL(addr, &str) != SP_ERROR_NONE) {
-                break;
+    
+            // Verifica se temos um RTTI válido
+            if (!rtti) {
+                return json;
             }
-            if (str) {
-                addr += strlen(str) + 1;
-            }
-            if (addr % sizeof(cell_t) != 0) {
-                addr += sizeof(cell_t) - (addr % sizeof(cell_t));
-            }
-            json = str ? str : "";
-            break;
-        }
-        case cb::kArray: {
-            if (is_ref) {
-                cell_t* a;
-                context_->LocalToPhysAddr(addr, &a);
-                addr = *a;
-            }
-            if (rtti->inner()) {
-                json
-                    = read_variable(addr, rtti->inner()->type(),
-                        const_cast<debug::Rtti*>(rtti->inner()));
-            }
-            break;
-        }
-        case cb::kEnumStruct: {
-            auto fields = current_image->getEnumFields(rtti->index());
-
-            uint32_t start = addr;
-
-            for (auto& field : fields) {
-                auto name = current_image->GetDebugName(field->name);
-                auto rtti_field = current_image->rtti_data()->typeFromTypeId(
-                    field->type_id);
-                if (!rtti_field) {
+    
+            cell_t* ptr;
+            switch (rtti->type()) {
+                case cb::kAny: {
+                    if (context_->LocalToPhysAddr(addr, &ptr) != SP_ERROR_NONE) {
+                        return json;
+                    }
+                    json = (int32_t)*ptr;
+                    break; // Adicionado break que faltava
+                }
+                
+                case cb::kBool: {
+                    if (context_->LocalToPhysAddr(addr, &ptr) != SP_ERROR_NONE) {
+                        return json;
+                    }
+                    json = (bool)*ptr;
                     break;
                 }
-                json[name] = read_variable(start, rtti_field->type(),
-                    (sp::debug::Rtti*)rtti_field);
+                
+                case cb::kInt32: {
+                    if (context_->LocalToPhysAddr(addr, &ptr) != SP_ERROR_NONE) {
+                        return json;
+                    }
+                    json = (int32_t)*ptr;
+                    break;
+                }
+                
+                case cb::kFloat32: {
+                    if (context_->LocalToPhysAddr(addr, &ptr) != SP_ERROR_NONE) {
+                        return json;
+                    }
+                    json = sp_ctof(*ptr);
+                    break;
+                }
+                
+                case cb::kFixedArray: {
+                    if (rtti->inner()) {
+                        if (rtti->inner()->type() == cb::kChar8) {
+                            json = read_variable(addr, rtti->inner()->type(),
+                                const_cast<debug::Rtti*>(rtti->inner()), false);
+                        } else {
+                            for (int i = 0; i < rtti->index(); i++) {
+                                uint32_t start = addr;
+                                auto inner_json = read_variable(start, rtti->inner()->type(),
+                                    const_cast<debug::Rtti*>(rtti->inner()), false);
+                                if (!inner_json.is_null()) {
+                                    json[i] = inner_json;
+                                }
+                                addr += 4;
+                            }
+                        }
+                    }
+                    break;
+                }
+                
+                case cb::kChar8: {
+                    char* str = nullptr;
+                    if (context_->LocalToStringNULL(addr, &str) != SP_ERROR_NONE) {
+                        return json;
+                    }
+                    if (str) {
+                        addr += strlen(str) + 1;
+                    }
+                    if (addr % sizeof(cell_t) != 0) {
+                        addr += sizeof(cell_t) - (addr % sizeof(cell_t));
+                    }
+                    json = str ? str : "";
+                    break;
+                }
+                
+                case cb::kArray: {
+                    if (is_ref) {
+                        cell_t* a;
+                        if (context_->LocalToPhysAddr(addr, &a) != SP_ERROR_NONE) {
+                            return json;
+                        }
+                        addr = *a;
+                    }
+                    if (rtti->inner()) {
+                        json = read_variable(addr, rtti->inner()->type(),
+                            const_cast<debug::Rtti*>(rtti->inner()));
+                    }
+                    break;
+                }
+                
+                case cb::kEnumStruct: {
+                    auto fields = current_image->getEnumFields(rtti->index());
+                    if (!fields.empty()) {
+                        uint32_t start = addr;
+                        for (auto& field : fields) {
+                            if (!field) continue;
+                            
+                            auto name = current_image->GetDebugName(field->name);
+                            if (!name) continue;
+                            
+                            auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
+                            if (!rtti_field) continue;
+                            
+                            auto field_json = read_variable(start, rtti_field->type(),
+                                (sp::debug::Rtti*)rtti_field);
+                            if (!field_json.is_null()) {
+                                json[name] = field_json;
+                            }
+                        }
+                    }
+                    break;
+                }
+                
+                case cb::kClassdef: {
+                    auto fields = current_image->getTypeFields(rtti->index());
+                    if (!fields.empty()) {
+                        uint32_t field_offset = addr;
+                        for (auto& field : fields) {
+                            if (!field) continue;
+                            
+                            uint32_t start = field_offset;
+                            auto name = current_image->GetDebugName(field->name);
+                            if (!name) continue;
+                            
+                            auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
+                            if (!rtti_field) continue;
+                            
+                            auto field_json = read_variable(start, rtti_field->type(),
+                                (sp::debug::Rtti*)rtti_field, true);
+                            if (!field_json.is_null()) {
+                                json[name] = field_json;
+                            }
+                            field_offset += sizeof(cell_t);
+                        }
+                    }
+                    break;
+                }
             }
-            break;
         }
-        case cb::kClassdef: {
-            auto fields = current_image->getTypeFields(rtti->index());
-            cell_t* ptr;
-            uint32_t field_offset = addr;
-
-            for (auto& field : fields) {
-                uint32_t start = field_offset;
-
-                auto name = current_image->GetDebugName(field->name);
-                auto rtti_field = current_image->rtti_data()->typeFromTypeId(
-                    field->type_id);
-                json[name] = read_variable(start, rtti_field->type(),
-                    (sp::debug::Rtti*)rtti_field, true);
-                field_offset += sizeof(cell_t);
+        catch (const std::exception& e) {
+            if (DEBUG) {
+                fmt::print(stderr, "Exception in read_variable: {}\n", e.what());
             }
-            break;
+            return nlohmann::json();
         }
-        }
-
+    
         return json;
     }
     variable_s
