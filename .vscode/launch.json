@@ -8,9 +8,9 @@
 			"preLaunchTask": "Build Extension in Watch Mode",
 			"runtimeExecutable": "${execPath}",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}/vscode"
+				"--extensionDevelopmentPath=${workspaceFolder}/vscode",
 			],
-			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ]
+			"outFiles": [ "${workspaceFolder}/vscode/out/**/*.js" ],
 		},
 		{
 			"type": "node",

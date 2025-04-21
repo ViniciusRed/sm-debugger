@@ -6,6 +6,7 @@ project(sm_debugger)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(fmt CONFIG REQUIRED)
+find_path(BRYNET_INCLUDE_DIRS "brynet/Version.hpp") 
 
 # Configuração do SDK
 if(NOT SDK)
@@ -31,9 +32,9 @@ include("cmake/cmake-version4git.cmake")
 PROJECT_VERSION_FROM_GIT()
 
 # Verificar arquitetura 32-bit
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
-    message(FATAL_ERROR "Arch must be 32-bit")
-endif()
+# if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
+#     message(FATAL_ERROR "Arch must be 32-bit")
+# endif()
 
 # Lista de arquivos fonte
 set(CPP_FILES 
@@ -99,6 +100,7 @@ set_target_properties(${OUTPUT_NAME} PROPERTIES
 
 # Diretórios de include
 target_include_directories(${OUTPUT_NAME} PRIVATE 
+    ${BRYNET_INCLUDE_DIRS}
     ${ZLIB_INCLUDE_DIR}
 )
 target_include_directories(${OUTPUT_NAME} PUBLIC 

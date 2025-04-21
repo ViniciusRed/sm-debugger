@@ -7,7 +7,6 @@
 #include <fmt/printf.h>
 #include <fstream>
 #include <mutex>
-#include <thread>
 #include <setjmp.h>
 #include <signal.h>
 #include <sstream>
@@ -23,20 +22,29 @@
 #define DEBUG 1
 #endif
 
-#include <asio.hpp>
-#include <sourcepawn/include/sp_vm_types.h>
+#include <brynet/net/EventLoop.hpp>
+#include <brynet/net/ListenThread.hpp>
+#include <brynet/net/PromiseReceive.hpp>
+#include <brynet/net/SocketLibFunction.hpp>
+#include <brynet/net/TcpService.hpp>
+#include <brynet/net/http/HttpFormat.hpp>
+#include <brynet/net/wrapper/ConnectionBuilder.hpp>
+#include <brynet/net/wrapper/ServiceBuilder.hpp>
+
+#include "sourcepawn/include/sp_vm_types.h"
 #include <nlohmann/json.hpp>
 
 using namespace sp;
-using namespace asio;
-using namespace asio::ip;
-using json = nlohmann::json;
+using namespace brynet;
+using namespace brynet::net;
+using namespace brynet::net::http;
 
 //
 //  Lowercases string
 //
 template <typename T>
-std::basic_string<T> lowercase(const std::basic_string<T>& s)
+std::basic_string<T>
+lowercase(const std::basic_string<T>& s)
 {
     std::basic_string<T> s2 = s;
     std::transform(s2.begin(), s2.end(), s2.begin(), tolower);
@@ -53,7 +61,6 @@ enum DebugState {
     DebugStepOut,
     DebugException
 };
-
 enum MessageType {
     Diagnostics = 0,
     RequestFile,
@@ -81,7 +88,8 @@ enum MessageType {
     TotalMessages
 };
 
-std::vector<std::string> split_string(const std::string& str, const std::string& delimiter)
+std::vector<std::string>
+split_string(const std::string& str, const std::string& delimiter)
 {
     std::vector<std::string> strings;
 
@@ -92,15 +100,16 @@ std::vector<std::string> split_string(const std::string& str, const std::string&
         prev = pos + 1;
     }
 
+    // To get the last substring (or only, if delimiter is not found)
     strings.push_back(str.substr(prev));
+
     return strings;
 }
-
 DebugReport DebugListener;
-
+void removeClientID(const TcpConnection::Ptr& session);
 class DebuggerClient {
 public:
-    std::shared_ptr<tcp::socket> socket;
+    TcpConnection::Ptr socket;
     std::unordered_set<std::string> files;
     int DebugState = 0;
 
@@ -136,10 +145,10 @@ public:
     std::map<std::string, std::shared_ptr<SmxV1Image>> images;
     std::shared_ptr<SmxV1Image> current_image = nullptr;
     SourcePawn::IFrameIterator* debug_iter;
-    std::vector<std::unique_ptr<DebuggerClient>> clients;
-    std::mutex clientsMutex;
-
-    DebuggerClient(std::shared_ptr<tcp::socket> socket) : socket(socket) {}
+    DebuggerClient(const TcpConnection::Ptr& tcp_connection)
+        : socket(tcp_connection)
+    {
+    }
 
     ~DebuggerClient()
     {
@@ -148,19 +157,24 @@ public:
     }
 
     class debugger_stopped : public std::exception {
+        std::string what_message;
+
     public:
-        const char* what() const throw()
+        const char*
+        what() const throw()
         {
             return "Debugger exited!";
         }
     };
 
-    void setBreakpoint(std::string path, int line, int id)
+    void
+    setBreakpoint(std::string path, int line, int id)
     {
         break_list[path].insert(line);
     }
 
-    void clearBreakpoints(std::string fileName)
+    void
+    clearBreakpoints(std::string fileName)
     {
         auto found = break_list.find(fileName);
         if (found != break_list.end()) {
@@ -171,7 +185,7 @@ public:
     enum {
         DISP_DEFAULT = 0x10,
         DISP_STRING = 0x20,
-        DISP_BIN = 0x30,
+        DISP_BIN = 0x30, /* ??? not implemented */
         DISP_HEX = 0x40,
         DISP_BOOL = 0x50,
         DISP_FIXED = 0x60,
@@ -180,15 +194,19 @@ public:
 #define MAX_DIMS 3
 #define DISP_MASK 0x0f
 
-    char* get_string(SmxV1Image::Symbol* sym)
+    char*
+    get_string(SmxV1Image::Symbol* sym)
     {
-        assert(sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY);
+        assert(sym->ident() == sp::IDENT_ARRAY
+            || sym->ident() == sp::IDENT_REFARRAY);
         assert(sym->dimcount() == 1);
 
+        // get the starting address and the length of the string
         cell_t* addr;
         cell_t base = sym->addr();
-        if (sym->vclass() == 1 || sym->vclass() == 3)
-            base += frm_;
+        if (sym->vclass() == 1
+            || sym->vclass() == 3) // local var or arg but not static
+            base += frm_; // addresses of local vars are relative to the frame
         if (sym->ident() == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &addr);
             assert(addr != nullptr);
@@ -201,14 +219,17 @@ public:
         return str;
     }
 
-    int get_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t* value)
+    int
+    get_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t* value)
     {
         cell_t* vptr;
         cell_t base = sym->addr();
         if (sym->vclass() & DISP_MASK)
-            base += frm_;
+            base += frm_; // addresses of local vars are relative to the frame
 
-        if (sym->ident() == sp::IDENT_REFERENCE || sym->ident() == sp::IDENT_REFARRAY) {
+        // a reference
+        if (sym->ident() == sp::IDENT_REFERENCE
+            || sym->ident() == sp::IDENT_REFARRAY) {
             if (context_->LocalToPhysAddr(base, &vptr) != SP_ERROR_NONE)
                 return false;
 
@@ -216,7 +237,8 @@ public:
             base = *vptr;
         }
 
-        if (context_->LocalToPhysAddr(base + index * sizeof(cell_t), &vptr) != SP_ERROR_NONE)
+        if (context_->LocalToPhysAddr(base + index * sizeof(cell_t), &vptr)
+            != SP_ERROR_NONE)
             return false;
 
         if (vptr != nullptr)
@@ -224,14 +246,15 @@ public:
         return vptr != nullptr;
     }
 
-    void printvalue(long value, int disptype, std::string& out_value, std::string& out_type)
+    void
+    printvalue(long value, int disptype, std::string& out_value,
+        std::string& out_type)
     {
         char out[64];
         if (disptype == DISP_FLOAT) {
             out_type = "float";
             sprintf(out, "%f", sp_ctof(value));
-        }
-        else if (disptype == DISP_FIXED) {
+        } else if (disptype == DISP_FIXED) {
             out_type = "fixed";
 #define MULTIPLIER 1000
             long ipart = value / MULTIPLIER;
@@ -239,12 +262,10 @@ public:
             if (value < 0)
                 value = -value;
             sprintf(out, "%ld.%03ld", ipart, value);
-        }
-        else if (disptype == DISP_HEX) {
+        } else if (disptype == DISP_HEX) {
             out_type = "hex";
             sprintf(out, "%lx", value);
-        }
-        else if (disptype == DISP_BOOL) {
+        } else if (disptype == DISP_BOOL) {
             out_type = "bool";
             switch (value) {
             case 0:
@@ -256,20 +277,21 @@ public:
             default:
                 sprintf(out, "%ld (true)", value);
                 break;
-            }
-        }
-        else {
+            } /* switch */
+        } else {
             out_type = "cell";
             sprintf(out, "%ld", value);
-        }
+        } /* if */
         out_value += out;
     }
-
-    nlohmann::json read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti, bool is_ref = false)
+    nlohmann::json
+    read_variable(uint32_t& addr, uint32_t type_id, debug::Rtti* rtti,
+        bool is_ref = false)
     {
         nlohmann::json json;
         if (!rtti) {
-            rtti = const_cast<debug::Rtti*>(current_image->rtti_data()->typeFromTypeId(type_id));
+            rtti = const_cast<debug::Rtti*>(
+                current_image->rtti_data()->typeFromTypeId(type_id));
         }
         cell_t* ptr;
         switch (rtti->type()) {
@@ -295,12 +317,16 @@ public:
         case cb::kFixedArray: {
             if (rtti->inner()) {
                 if (rtti->inner()->type() == cb::kChar8) {
-                    json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
-                }
-                else {
+                    json = read_variable(
+                        addr, rtti->inner()->type(),
+                        const_cast<debug::Rtti*>(rtti->inner()), false);
+                } else {
                     for (int i = 0; i < rtti->index(); i++) {
                         uint32_t start = addr;
-                        json[i] = read_variable(start, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()), false);
+
+                        json[i] = read_variable(
+                            start, rtti->inner()->type(),
+                            const_cast<debug::Rtti*>(rtti->inner()), false);
                         addr += 4;
                     }
                 }
@@ -328,20 +354,26 @@ public:
                 addr = *a;
             }
             if (rtti->inner()) {
-                json = read_variable(addr, rtti->inner()->type(), const_cast<debug::Rtti*>(rtti->inner()));
+                json
+                    = read_variable(addr, rtti->inner()->type(),
+                        const_cast<debug::Rtti*>(rtti->inner()));
             }
             break;
         }
         case cb::kEnumStruct: {
             auto fields = current_image->getEnumFields(rtti->index());
+
             uint32_t start = addr;
+
             for (auto& field : fields) {
                 auto name = current_image->GetDebugName(field->name);
-                auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
+                auto rtti_field = current_image->rtti_data()->typeFromTypeId(
+                    field->type_id);
                 if (!rtti_field) {
                     break;
                 }
-                json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field);
+                json[name] = read_variable(start, rtti_field->type(),
+                    (sp::debug::Rtti*)rtti_field);
             }
             break;
         }
@@ -349,20 +381,26 @@ public:
             auto fields = current_image->getTypeFields(rtti->index());
             cell_t* ptr;
             uint32_t field_offset = addr;
+
             for (auto& field : fields) {
                 uint32_t start = field_offset;
+
                 auto name = current_image->GetDebugName(field->name);
-                auto rtti_field = current_image->rtti_data()->typeFromTypeId(field->type_id);
-                json[name] = read_variable(start, rtti_field->type(), (sp::debug::Rtti*)rtti_field, true);
+                auto rtti_field = current_image->rtti_data()->typeFromTypeId(
+                    field->type_id);
+                json[name] = read_variable(start, rtti_field->type(),
+                    (sp::debug::Rtti*)rtti_field, true);
                 field_offset += sizeof(cell_t);
             }
             break;
         }
         }
+
         return json;
     }
-
-    variable_s display_variable(SmxV1Image::Symbol* sym, uint32_t index[], int idxlevel, bool noarray = false)
+    variable_s
+    display_variable(SmxV1Image::Symbol* sym, uint32_t index[], int idxlevel,
+        bool noarray = false)
     {
         nlohmann::json json;
         variable_s var;
@@ -378,45 +416,53 @@ public:
         auto rtti = sym->rtti();
         if (rtti && rtti->type_id) {
             uint32_t base = static_cast<uint32_t>(rtti->address);
-            if (sym->vclass() == 1 || sym->vclass() == 3)
-                base += frm_;
+            if (sym->vclass() == 1
+                || sym->vclass() == 3) // local var or arg but not static
+                base += frm_; // addresses of local vars are relative to the frame
 
             try {
-                auto json = read_variable(base, rtti->type_id, nullptr, sym->vclass() == 0x3);
+                auto json = read_variable(base, rtti->type_id, nullptr,
+                    sym->vclass() == 0x3);
                 if (!json.empty()) {
                     var.value = json.dump();
                     return var;
                 }
-            }
-            catch (...) {
+            } catch (...) {
                 // skip rtti parse
             }
         }
-
+        // first check whether the variable is visible at all
         if ((uint32_t)cip_ < sym->codestart() || (uint32_t)cip_ > sym->codeend()) {
             var.value = "Not in scope.";
             return var;
         }
 
+        // set default display type for the symbol (if none was set)
         if ((sym->vclass() & ~DISP_MASK) == 0) {
             const char* tagname = current_image->GetTagName(sym->tagid());
             if (tagname != nullptr) {
                 if (!stricmp(tagname, "bool")) {
                     sym->setVClass(sym->vclass() | DISP_BOOL);
-                }
-                else if (!stricmp(tagname, "float")) {
+                } else if (!stricmp(tagname, "float")) {
                     sym->setVClass(sym->vclass() | DISP_FLOAT);
                 }
             }
-            if ((sym->vclass() & ~DISP_MASK) == 0 && (sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY) && sym->dimcount() == 1) {
+            if ((sym->vclass() & ~DISP_MASK) == 0
+                && (sym->ident() == sp::IDENT_ARRAY
+                    || sym->ident() == sp::IDENT_REFARRAY)
+                && sym->dimcount() == 1) {
+                /* untagged array with a single dimension, walk through all
+                 * elements and check whether this could be a string
+                 */
                 char* ptr = get_string(sym);
                 if (ptr != nullptr) {
                     uint32_t i;
                     for (i = 0; ptr[i] != '\0'; i++) {
-                        if ((ptr[i] < ' ' && ptr[i] != '\n' && ptr[i] != '\r' && ptr[i] != '\t'))
-                            break;
+                        if ((ptr[i] < ' ' && ptr[i] != '\n' && ptr[i] != '\r'
+                                && ptr[i] != '\t'))
+                            break; // non-ASCII character
                         if (i == 0 && !isalpha(ptr[i]))
-                            break;
+                            break; // want a letter at the start
                     }
                     if (i > 0 && ptr[i] == '\0')
                         sym->setVClass(sym->vclass() | DISP_STRING);
@@ -424,11 +470,16 @@ public:
             }
         }
 
-        if (sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident() == sp::IDENT_ARRAY
+            || sym->ident() == sp::IDENT_REFARRAY) {
             int dim;
-            symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
+            symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(
+                *current_image->GetArrayDimensions(sym));
+            // check whether any of the indices are out of range
+            assert(symdims != nullptr);
             for (dim = 0; dim < idxlevel; dim++) {
-                if (symdims->at(dim)->size() > 0 && index[dim] >= symdims->at(dim)->size())
+                if (symdims->at(dim)->size() > 0
+                    && index[dim] >= symdims->at(dim)->size())
                     break;
             }
             if (dim < idxlevel) {
@@ -437,56 +488,59 @@ public:
             }
         }
 
-        if ((sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY) && idxlevel == 0) {
+        // Print first dimension of array
+        if ((sym->ident() == sp::IDENT_ARRAY
+                || sym->ident() == sp::IDENT_REFARRAY)
+            && idxlevel == 0) {
+            // Print string
             if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
                 var.type = "String";
                 char* str = get_string(sym);
                 if (str != nullptr) {
                     var.value = str;
-                }
-                else
+                } else
                     var.value = "NULL_STRING";
             }
+            // Print one-dimensional array
             else if (sym->dimcount() == 1) {
                 if (!noarray)
                     var.type = "Array";
-                assert(symdims != nullptr);
+                assert(symdims != nullptr); // set in the previous block
                 uint32_t len = symdims->at(0)->size();
                 uint32_t i;
                 auto type = (sym->vclass() & ~DISP_MASK);
                 if (type == DISP_FLOAT) {
                     json = std::vector<float>();
-                }
-                else if (type == DISP_BOOL) {
+                } else if (type == DISP_BOOL) {
                     json = std::vector<bool>();
-                }
-                else {
+                } else {
                     json = std::vector<cell_t>();
                 }
                 for (i = 0; i < len; i++) {
                     if (get_symbolvalue(sym, i, &value)) {
                         if (type == DISP_FLOAT) {
                             json.push_back(sp_ctof(value));
-                        }
-                        else if (type == DISP_BOOL) {
+                        } else if (type == DISP_BOOL) {
                             json.push_back(value);
-                        }
-                        else {
+                        } else {
                             json.push_back(value);
                         }
                     }
                 }
                 var.value = json.dump(4).c_str();
             }
+            // Not supported..
             else {
                 var.value = "(multi-dimensional array)";
             }
-        }
-        else if (sym->ident() != sp::IDENT_ARRAY && sym->ident() != sp::IDENT_REFARRAY && idxlevel > 0) {
+        } else if (sym->ident() != sp::IDENT_ARRAY
+            && sym->ident() != sp::IDENT_REFARRAY && idxlevel > 0) {
+            // index used on a non-array
             var.value = "(invalid index, not an array)";
-        }
-        else {
-            assert(idxlevel > 0 || index[0] == 0);
+        } else {
+            // simple variable, or indexed array element
+            assert(idxlevel > 0
+                || index[0] == 0); // index should be zero if non-array
             int dim;
             int base = 0;
             for (dim = 0; dim < idxlevel - 1; dim++) {
@@ -498,8 +552,10 @@ public:
                 base += value / sizeof(cell_t);
             }
 
-            if (get_symbolvalue(sym, base + index[dim], &value) && sym->dimcount() == idxlevel)
-                printvalue(value, (sym->vclass() & ~DISP_MASK), var.value, var.type);
+            if (get_symbolvalue(sym, base + index[dim], &value)
+                && sym->dimcount() == idxlevel)
+                printvalue(value, (sym->vclass() & ~DISP_MASK), var.value,
+                    var.type);
             else if (sym->dimcount() != idxlevel)
                 var.value = "(invalid number of dimensions)";
             else
@@ -508,7 +564,8 @@ public:
         return var;
     }
 
-    void evaluateVar(int frame_id, char* variable)
+    void
+    evaluateVar(int frame_id, char* variable)
     {
         if (current_state != DebugRun) {
             auto imagev1 = current_image.get();
@@ -527,24 +584,29 @@ public:
                     buffer.PutString(var.name.c_str());
                     buffer.PutInt(var.value.size() + 1);
                     buffer.PutString(var.value.c_str());
+                    ;
                     buffer.PutInt(var.type.size() + 1);
                     buffer.PutString(var.type.c_str());
                     buffer.PutInt(0);
                 }
                 *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-                sendData(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
+                socket->send(static_cast<const char*>(buffer.Base()),
+                    static_cast<size_t>(buffer.TellPut()));
             }
         }
     }
 
-    int set_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t value)
+    int
+    set_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t value)
     {
         cell_t* vptr;
         cell_t base = sym->addr();
         if (sym->vclass() & DISP_MASK)
-            base += frm_;
+            base += frm_; // addresses of local vars are relative to the frame
 
-        if (sym->ident() == sp::IDENT_REFERENCE || sym->ident() == sp::IDENT_REFARRAY) {
+        // a reference
+        if (sym->ident() == sp::IDENT_REFERENCE
+            || sym->ident() == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &vptr);
             assert(vptr != nullptr);
             base = *vptr;
@@ -556,28 +618,35 @@ public:
         return true;
     }
 
-    bool SetSymbolString(const SmxV1Image::Symbol* sym, char* str)
+    bool
+    SetSymbolString(const SmxV1Image::Symbol* sym, char* str)
     {
-        assert(sym->ident() == sp::IDENT_ARRAY || sym->ident() == sp::IDENT_REFARRAY);
+        assert(sym->ident() == sp::IDENT_ARRAY
+            || sym->ident() == sp::IDENT_REFARRAY);
         assert(sym->dimcount() == 1);
 
         cell_t* vptr;
         cell_t base = sym->addr();
         if (sym->vclass() & DISP_MASK)
-            base += frm_;
+            base += frm_; // addresses of local vars are relative to the frame
 
-        if (sym->ident() == sp::IDENT_REFERENCE || sym->ident() == sp::IDENT_REFARRAY) {
+        // a reference
+        if (sym->ident() == sp::IDENT_REFERENCE
+            || sym->ident() == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &vptr);
             assert(vptr != nullptr);
             base = *vptr;
         }
 
         std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> dims;
-        dims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(*current_image->GetArrayDimensions(sym));
-        return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL) == SP_ERROR_NONE;
+        dims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(
+            *current_image->GetArrayDimensions(sym));
+        return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL)
+            == SP_ERROR_NONE;
     }
 
-    void setVariable(std::string var, std::string value, int index)
+    void
+    setVariable(std::string var, std::string value, int index)
     {
         bool success = false;
         bool valid_value = true;
@@ -585,40 +654,40 @@ public:
             auto imagev1 = current_image.get();
             std::unique_ptr<SmxV1Image::Symbol> sym;
             cell_t result = 0;
-            value.erase(remove(value.begin(), value.end(), '\"'), value.end());
+            value.erase(remove(value.begin(), value.end(), '\"'),
+                value.end());
             if (imagev1->GetVariable(var.c_str(), cip_, sym)) {
-                if ((sym->ident() == IDENT_ARRAY || sym->ident() == IDENT_REFARRAY)) {
+                if ((sym->ident() == IDENT_ARRAY
+                        || sym->ident() == IDENT_REFARRAY)) {
                     if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
-                        SetSymbolString(sym.get(), const_cast<char*>(value.c_str()));
+                        SetSymbolString(sym.get(),
+                            const_cast<char*>(value.c_str()));
                     }
                     valid_value = false;
-                }
-                else {
+                } else {
                     size_t lastChar;
                     try {
                         int intvalue = std::stoi(value, &lastChar);
                         if (lastChar == value.size()) {
                             result = intvalue;
-                        }
-                        else {
+                        } else {
                             auto val = std::stof(value, &lastChar);
                             result = sp_ftoc(val);
                         }
-                    }
-                    catch (...) {
+                    } catch (...) {
+                        // ??? some text or bool
                         if (value == "true") {
                             result = 1;
-                        }
-                        else if (value == "false") {
+                        } else if (value == "false") {
                             result = 0;
-                        }
-                        else {
+                        } else {
                             valid_value = false;
                         }
                     }
                 }
 
-                if (valid_value && (imagev1->GetVariable(var.c_str(), cip_, sym))) {
+                if (valid_value
+                    && (imagev1->GetVariable(var.c_str(), cip_, sym))) {
                     success = set_symbolvalue(sym.get(), index, (cell_t)result);
                 }
             }
@@ -630,10 +699,12 @@ public:
             buffer.PutInt(success);
         }
         *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-        sendData(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
+        socket->send(static_cast<const char*>(buffer.Base()),
+            static_cast<size_t>(buffer.TellPut()));
     }
 
-    void sendVariables(char* scope)
+    void
+    sendVariables(char* scope)
     {
         bool local_scope = strstr(scope, ":%local%");
         bool global_scope = strstr(scope, ":%global%");
@@ -648,26 +719,29 @@ public:
                 memset(idx, 0, sizeof idx);
                 std::vector<variable_s> vars;
                 if (local_scope || global_scope) {
-                    SmxV1Image::SymbolIterator iter = imagev1->symboliterator(global_scope);
+                    SmxV1Image::SymbolIterator iter
+                        = imagev1->symboliterator(global_scope);
                     while (!iter.Done()) {
                         const auto sym = iter.Next();
 
-                        if (sym->ident() != sp::IDENT_FUNCTION && (sym->codestart() <= (uint32_t)cip_ && sym->codeend() >= (uint32_t)cip_) || global_scope) {
+                        // Only variables in scope.
+                        if (sym->ident() != sp::IDENT_FUNCTION
+                                && (sym->codestart() <= (uint32_t)cip_
+                                    && sym->codeend() >= (uint32_t)cip_)
+                            || global_scope) {
                             auto var = display_variable(sym, idx, dim);
                             if (local_scope) {
                                 if ((sym->vclass() & DISP_MASK) > 0) {
                                     vars.push_back(var);
                                 }
-                            }
-                            else {
+                            } else {
                                 if (!((sym->vclass() & DISP_MASK) > 0)) {
                                     vars.push_back(var);
                                 }
                             }
                         }
                     }
-                }
-                else {
+                } else {
                     if (imagev1->GetVariable(scope, cip_, sym)) {
                         auto var = display_variable(sym.get(), idx, dim, true);
                         std::string var_name = scope;
@@ -690,17 +764,20 @@ public:
                     buffer.PutString(var.name.c_str());
                     buffer.PutInt(var.value.size() + 1);
                     buffer.PutString(var.value.c_str());
+                    ;
                     buffer.PutInt(var.type.size() + 1);
                     buffer.PutString(var.type.c_str());
                     buffer.PutInt(0);
                 }
                 *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-                sendData(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
+                socket->send(static_cast<const char*>(buffer.Base()),
+                    static_cast<size_t>(buffer.TellPut()));
             }
         }
     }
 
-    void CallStack()
+    void
+    CallStack()
     {
         std::vector<call_stack_s> callStack;
         if (current_state == DebugException) {
@@ -708,26 +785,29 @@ public:
                 uint32_t index = 0;
                 for (; !debug_iter->Done(); debug_iter->Next(), index++) {
                     if (debug_iter->IsNativeFrame()) {
-                        callStack.push_back({ 0, debug_iter->FunctionName(), "native" });
-                    }
-                    else if (debug_iter->IsScriptedFrame()) {
-                        auto current_file = std::filesystem::path(debug_iter->FilePath()).filename().string();
+                        callStack.push_back(
+                            { 0, debug_iter->FunctionName(), "native" });
+                    } else if (debug_iter->IsScriptedFrame()) {
+                        auto current_file
+                            = std::filesystem::path(debug_iter->FilePath())
+                                  .filename()
+                                  .string();
                         lowercase(current_file);
-                        callStack.push_back({ debug_iter->LineNumber() - 1, debug_iter->FunctionName(), current_file });
+                        callStack.push_back({ debug_iter->LineNumber() - 1,
+                            debug_iter->FunctionName(),
+                            current_file });
                     }
                 }
             }
             current_state = DebugBreakpoint;
-        }
-        else if (current_state != DebugRun) {
+        } else if (current_state != DebugRun) {
             IFrameIterator* iter = context_->CreateFrameIterator();
 
             uint32_t index = 0;
             for (; !iter->Done(); iter->Next(), index++) {
                 if (iter->IsNativeFrame()) {
                     callStack.push_back({ 0, iter->FunctionName(), "" });
-                }
-                else if (iter->IsScriptedFrame()) {
+                } else if (iter->IsScriptedFrame()) {
                     std::string current_file = iter->FilePath();
                     for (auto file : files) {
                         if (file.find(current_file) != std::string::npos) {
@@ -735,7 +815,8 @@ public:
                             break;
                         }
                     }
-                    callStack.push_back({ iter->LineNumber() - 1, iter->FunctionName(), current_file });
+                    callStack.push_back({ iter->LineNumber() - 1,
+                        iter->FunctionName(), current_file });
                 }
             }
             context_->DestroyFrameIterator(iter);
@@ -755,10 +836,12 @@ public:
             }
         }
         *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
-        sendData(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
+        socket->send(static_cast<const char*>(buffer.Base()),
+            static_cast<size_t>(buffer.TellPut()));
     }
 
-    void WaitWalkCmd(std::string reason = "Breakpoint", std::string text = "N/A")
+    void
+    WaitWalkCmd(std::string reason = "Breakpoint", std::string text = "N/A")
     {
         if (!receive_walk_cmd) {
             CUtlBuffer buffer;
@@ -775,7 +858,8 @@ public:
                 }
                 *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
             }
-            sendData(static_cast<const char*>(buffer.Base()), static_cast<size_t>(buffer.TellPut()));
+            socket->send(static_cast<const char*>(buffer.Base()),
+                static_cast<size_t>(buffer.TellPut()));
             std::unique_lock<std::mutex> lck(mtx);
             cv.wait(lck, [this] { return receive_walk_cmd; });
         }
@@ -785,7 +869,8 @@ public:
         }
     }
 
-    void ReportError(const IErrorReport& report, IFrameIterator& iter)
+    void
+    ReportError(const IErrorReport& report, IFrameIterator& iter)
     {
         receive_walk_cmd = false;
         current_state = DebugException;
@@ -793,8 +878,8 @@ public:
         debug_iter = &iter;
         WaitWalkCmd("exception", report.Message());
     }
-
-    int DebugHook(SourcePawn::IPluginContext* ctx, sp_debug_break_info_t& BreakInfo)
+    int(DebugHook)(SourcePawn::IPluginContext* ctx,
+        sp_debug_break_info_t& BreakInfo)
     {
         std::string filename = ctx->GetRuntime()->GetFilename();
         auto image = images.find(filename);
@@ -804,8 +889,7 @@ public:
             current_image->validate();
             images.insert({ filename, current_image });
             fclose(fp);
-        }
-        else {
+        } else {
             current_image = image->second;
         }
         context_ = ctx;
@@ -814,6 +898,7 @@ public:
 
         context_ = ctx;
         cip_ = BreakInfo.cip;
+        // Reset the state.
         frm_ = BreakInfo.frm;
         receive_walk_cmd = false;
 
@@ -826,7 +911,9 @@ public:
             }
 
             if (iter->IsScriptedFrame()) {
-                current_file = std::filesystem::path(iter->FilePath()).filename().string();
+                current_file = std::filesystem::path(iter->FilePath())
+                                   .filename()
+                                   .string();
                 lowercase(current_file);
 
                 for (auto file : files) {
@@ -842,7 +929,10 @@ public:
 
         static uint32_t lastline = 0;
         current_image->LookupLine(cip_, &current_line);
+        // Reset the frame iterator, so stack traces start at the beginning
+        // again.
 
+        /* dont break twice */
         if (current_line == lastline)
             return current_state;
 
@@ -852,8 +942,7 @@ public:
 
         if (current_state == DebugPause || current_state == DebugStepIn) {
             WaitWalkCmd();
-        }
-        else {
+        } else {
             auto found = break_list.find(current_file);
             if (found != break_list.end()) {
                 if (found->second.find(current_line) != found->second.end()) {
@@ -863,6 +952,7 @@ public:
             }
         }
 
+        /* check whether we are stepping through a sub-function */
         if (current_state == DebugStepOver) {
             if (frm_ < lastfrm_) {
                 return current_state;
@@ -879,18 +969,21 @@ public:
         return current_state;
     }
 
-    void SwitchState(unsigned char state)
+    void
+    SwitchState(unsigned char state)
     {
         current_state = state;
         receive_walk_cmd = true;
         cv.notify_one();
     }
 
-    void AskFile()
+    void
+    AskFile()
     {
     }
 
-    void RecvDebugFile(CUtlBuffer* buf)
+    void
+    RecvDebugFile(CUtlBuffer* buf)
     {
         char file[260];
         int strlen = buf->GetInt();
@@ -900,18 +993,21 @@ public:
         files.insert(filename);
     }
 
-    void RecvStateSwitch(CUtlBuffer* buf)
+    void
+    RecvStateSwitch(CUtlBuffer* buf)
     {
         auto CurrentState = buf->GetUnsignedChar();
         SwitchState(CurrentState);
     }
 
-    void RecvCallStack(CUtlBuffer* buf)
+    void
+    RecvCallStack(CUtlBuffer* buf)
     {
         CallStack();
     }
 
-    void recvRequestVariables(CUtlBuffer* buf)
+    void
+    recvRequestVariables(CUtlBuffer* buf)
     {
         char scope[256];
         int strlen = buf->GetInt();
@@ -919,7 +1015,8 @@ public:
         sendVariables(scope);
     }
 
-    void recvRequestEvaluate(CUtlBuffer* buf)
+    void
+    recvRequestEvaluate(CUtlBuffer* buf)
     {
         int frameId;
         char variable[256];
@@ -929,21 +1026,13 @@ public:
         evaluateVar(frameId, variable);
     }
 
-    void recvDisconnect(CUtlBuffer* buf)
+    void
+    recvDisconnect(CUtlBuffer* buf)
     {
-
-        std::lock_guard<std::mutex> lock(clientsMutex);
-        if (auto it = std::find_if(clients.begin(), clients.end(),
-            [this](const auto& client) {
-                return client->socket == this->socket;
-            });
-            it != clients.end()) {
-            clients.erase(it);
-        }
-        stopDebugging();
     }
 
-    void recvBreakpoint(CUtlBuffer* buf)
+    void
+    recvBreakpoint(CUtlBuffer* buf)
     {
         char path[256];
         int strlen = buf->GetInt();
@@ -956,7 +1045,8 @@ public:
         setBreakpoint(filename, line, id);
     }
 
-    void recvClearBreakpoints(CUtlBuffer* buf)
+    void
+    recvClearBreakpoints(CUtlBuffer* buf)
     {
         char path[256];
         int strlen = buf->GetInt();
@@ -967,7 +1057,8 @@ public:
         clearBreakpoints(filename);
     }
 
-    void stopDebugging()
+    void
+    stopDebugging()
     {
         current_state = DebugDead;
         receive_walk_cmd = true;
@@ -976,19 +1067,15 @@ public:
         cv.wait(lck, [this] { return unload; });
     }
 
-    void recvStopDebugging(CUtlBuffer* buf)
+    void
+    recvStopDebugging(CUtlBuffer* buf)
     {
         stopDebugging();
-        std::lock_guard<std::mutex> lock(clientsMutex);
-        if (auto it = std::find_if(clients.begin(), clients.end(),
-            [this](const auto& client) {
-                return client->socket == this->socket;
-            });
-            it != clients.end()) {
-            clients.erase(it);
-        }
+        removeClientID(socket);
     }
-    void recvRequestSetVariable(CUtlBuffer* buf)
+
+    void
+    recvRequestSetVariable(CUtlBuffer* buf)
     {
         char var[256];
         int strlen = buf->GetInt();
@@ -1000,190 +1087,178 @@ public:
         setVariable(var, value, index);
     }
 
-    void RecvCmd(const char* buffer, size_t len)
+    void
+    RecvCmd(const char* buffer, size_t len)
     {
         CUtlBuffer buf((void*)buffer, len);
         while (buf.TellGet() < len) {
             int msg_len = buf.GetUnsignedInt();
             int type = buf.GetUnsignedChar();
             switch (type) {
-            case RequestFile:
+            case RequestFile: {
                 RecvDebugFile(&buf);
                 break;
-            case Pause:
+            }
+            case Pause: {
                 RecvStateSwitch(&buf);
                 break;
-            case Continue:
+            }
+            case Continue: {
                 RecvStateSwitch(&buf);
                 break;
-            case StepIn:
+            }
+            case StepIn: {
                 RecvStateSwitch(&buf);
                 break;
-            case StepOver:
+            }
+            case StepOver: {
                 RecvStateSwitch(&buf);
                 break;
-            case StepOut:
+            }
+            case StepOut: {
                 RecvStateSwitch(&buf);
                 break;
-            case RequestCallStack:
+            }
+            case RequestCallStack: {
                 RecvCallStack(&buf);
                 break;
-            case RequestVariables:
+            }
+            case RequestVariables: {
                 recvRequestVariables(&buf);
                 break;
-            case RequestEvaluate:
+            }
+            case RequestEvaluate: {
                 recvRequestEvaluate(&buf);
                 break;
-            case Disconnect:
+            }
+            case Disconnect: {
                 recvDisconnect(&buf);
                 break;
-            case ClearBreakpoints:
+            }
+            case ClearBreakpoints: {
                 recvClearBreakpoints(&buf);
                 break;
-            case SetBreakpoint:
+            }
+            case SetBreakpoint: {
                 recvBreakpoint(&buf);
                 break;
-            case StopDebugging:
+            }
+            case StopDebugging: {
                 recvStopDebugging(&buf);
                 break;
-            case RequestSetVariable:
+            }
+            case RequestSetVariable: {
                 recvRequestSetVariable(&buf);
                 break;
             }
+            }
         }
-    }
-
-    void sendData(const char* data, size_t length)
-    {
-        asio::async_write(*socket, asio::buffer(data, length),
-            [](const asio::error_code& error, std::size_t /*bytes_transferred*/) {
-                if (error) {
-                    fmt::print(stderr, "Send error: {}\n", error.message());
-                }
-            });
     }
 };
 
 std::vector<std::unique_ptr<DebuggerClient>> clients;
-std::mutex clientsMutex;
 
-void addClientID(std::shared_ptr<tcp::socket> socket)
+void addClientID(const TcpConnection::Ptr& session)
 {
-    std::lock_guard<std::mutex> lock(clientsMutex);
+    // Adicionar logging para debug
+    fmt::print(stderr, "Attempting to add client ID...\n");
+    fflush(stderr);
+
     try {
         if (auto it = std::find_if(clients.begin(), clients.end(),
-            [&socket](const auto& client) {
-                return client->socket == socket;
-            });
-            it == clients.end()) {
-            clients.push_back(std::make_unique<DebuggerClient>(socket));
-            clients.back()->AskFile();
-        }
-    }
-    catch (const std::exception& e) {
-        fmt::print(stderr, "Exception during client addition: {}\n", e.what());
-    }
-}
-
-void removeClientID(std::shared_ptr<tcp::socket> socket)
-{
-    std::lock_guard<std::mutex> lock(clientsMutex);
-    if (auto it = std::find_if(clients.begin(), clients.end(),
-        [&socket](const auto& client) {
-            return client->socket == socket;
-        });
-        it != clients.end()) {
-        clients.erase(it);
-    }
-}
-
-void debugThread()
-{
-    try {
-        asio::io_context io_context;
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), SM_Debugger_port()));
-
-        fmt::print(stderr, "Debugger listening on port {}\n", SM_Debugger_port());
-
-        std::atomic<bool> running{ true };
-
-        std::function<void()> acceptConnection;
-        acceptConnection = [&] {
-            auto socket = std::make_shared<tcp::socket>(io_context);
-            acceptor.async_accept(*socket, [&, socket](const asio::error_code& error) {
-                if (!error) {
-                    try {
-                        socket->set_option(tcp::no_delay(true));
-                        addClientID(socket);
-
-                        auto buffer = std::make_shared<std::vector<char>>(1024);
-
-                        // Define readHandler type explicitly before using it
-                        std::function<void(const asio::error_code&, std::size_t)> readHandler;
-                        readHandler = [&, socket, buffer](const asio::error_code& ec, std::size_t length) {
-                            if (!ec) {
-                                std::lock_guard<std::mutex> lock(clientsMutex);
-                                for (auto& client : clients) {
-                                    if (client->socket == socket) {
-                                        try {
-                                            client->RecvCmd(buffer->data(), length);
-                                        }
-                                        catch (const std::exception& e) {
-                                            fmt::print(stderr, "Error processing command: {}\n", e.what());
-                                        }
-                                        break;
-                                    }
-                                }
-
-                                socket->async_read_some(asio::buffer(*buffer), readHandler);
-                            }
-                            else {
-                                // Inline removeClientID functionality
-                                std::lock_guard<std::mutex> lock(clientsMutex);
-                                if (auto it = std::find_if(clients.begin(), clients.end(),
-                                    [&socket](const auto& client) {
-                                        return client->socket == socket;
-                                    });
-                                    it != clients.end()) {
-                                    clients.erase(it);
-                                }
-                            }
-                            };
-
-                        socket->async_read_some(asio::buffer(*buffer), readHandler);
-                    }
-                    catch (const std::exception& e) {
-                        fmt::print(stderr, "Connection error: {}\n", e.what());
-                    }
-                }
-                else {
-                    fmt::print(stderr, "Accept error: {}\n", error.message());
-                }
-
-                if (running) {
-                    acceptConnection();
-                }
+                [&session](const auto& client) {
+                    return client->socket == session;
                 });
-            };
+            it == clients.end()) {
+            fmt::print(stderr, "Client not found, adding new client...\n");
+            fflush(stderr);
 
-        acceptConnection();
+            // Adicione mais detalhes sobre o cliente - use fmt::format
+            // corretamente
+            fmt::print(stderr, "Client pointer: {}\n", (void*)session.get());
 
-        while (running) {
-            try {
-                io_context.run();
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            catch (const std::exception& e) {
-                fmt::print(stderr, "Error in main loop: {}\n", e.what());
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            }
+            clients.push_back(std::make_unique<DebuggerClient>(session));
+            clients.back()->AskFile();
+
+            // Verifique se o cliente foi adicionado corretamente
+            fmt::print(stderr, "Client added successfully. Total clients: {}\n",
+                clients.size());
+            fflush(stderr);
+        } else {
+            fmt::print(stderr, "Client already exists in the list\n");
+            fflush(stderr);
         }
-    }
-    catch (const std::exception& e) {
-        fmt::print(stderr, "Fatal error in debug thread: {}\n", e.what());
+    } catch (const std::exception& e) {
+        fmt::print(stderr, "Exception during client addition: {}\n", e.what());
+        fflush(stderr);
     }
 }
 
+void removeClientID(const TcpConnection::Ptr& session)
+{
+    // Adicionar logging para debug
+    fmt::print(stderr, "Attempting to remove client ID...\n");
+    fflush(stderr);
+
+    if (auto it = std::find_if(clients.begin(), clients.end(),
+            [&session](const auto& client) {
+                return client->socket == session;
+            });
+        it != clients.end()) {
+        fmt::print(stderr, "Client found, removing...\n");
+        fflush(stderr);
+        clients.erase(it);
+        fmt::print(stderr, "Client removed successfully\n");
+        fflush(stderr);
+    } else {
+        fmt::print(stderr, "Client not found in the list\n");
+        fflush(stderr);
+    }
+}
+
+void debugThread() {
+        auto service = brynet::net::IOThreadTcpService::Create();
+	service->startWorkerThread(2);
+
+	auto mainLoop = std::make_shared<EventLoop>();
+	auto enterCallback = [=](const TcpConnection::Ptr& session) {
+		addClientID(session);
+		session->setDisConnectCallback([=](
+			const TcpConnection::Ptr& session) {
+				removeClientID(session);
+			});
+		auto contentLength = std::make_shared<size_t>();
+		session->setDataCallback([=](brynet::base::BasePacketReader& reader) {
+			for (auto& client : clients) {
+				if (client->socket == session) {
+					client->RecvCmd(reader.begin(), reader.size());
+					break;
+				}
+			}
+			reader.consumeAll();
+			});
+	};
+
+	wrapper::ListenerBuilder listener;
+	listener.WithService(service)
+		.AddSocketProcess(
+			{ [](TcpSocket& socket) { socket.setNodelay(); } })
+		.WithMaxRecvBufferSize(1024 * 1024)
+		.AddEnterCallback(enterCallback)
+		.WithAddr(false, "0.0.0.0", SM_Debugger_port())
+		.asyncRun();
+
+	while (true) {
+		mainLoop->loop(1000);
+	}
+}
+
+/**
+ * @brief Called on debug spew.
+ *
+ * @param msg    Message text.
+ * @param fmt    Message formatting arguments (printf-style).
+ */
 void DebugReport::OnDebugSpew(const char* msg, ...)
 {
     va_list ap;
@@ -1195,12 +1270,20 @@ void DebugReport::OnDebugSpew(const char* msg, ...)
     original->OnDebugSpew(buffer);
 }
 
+/**
+ * @brief Called when an error is reported and no exception
+ * handler was available.
+ *
+ * @param report  Error report object.
+ * @param iter      Stack frame iterator.
+ */
 void DebugReport::ReportError(const IErrorReport& report, IFrameIterator& iter)
 {
     if (!clients.empty()) {
         auto plugin = report.Context();
         if (plugin) {
-            bool found = false;
+            auto found = false;
+            /* first search already found attached hook */
             for (auto& client : clients) {
                 if (client && client->context_ == iter.Context()) {
                     found = true;
@@ -1209,14 +1292,26 @@ void DebugReport::ReportError(const IErrorReport& report, IFrameIterator& iter)
                 }
             }
 
+            /* if not found, search for new client who wants to attach to
+             * current file */
             if (!found) {
-                for (int i = 0; i < report.Context()->GetRuntime()->GetDebugInfo()->NumFiles(); i++) {
-                    auto filename = std::string(report.Context()->GetRuntime()->GetDebugInfo()->GetFileName(i));
-                    auto current_file = std::filesystem::path(filename).filename().string();
+                for (int i = 0; i < report.Context()
+                                    ->GetRuntime()
+                                    ->GetDebugInfo()
+                                    ->NumFiles();
+                    i++) {
+                    auto filename = std::string(report.Context()
+                            ->GetRuntime()
+                            ->GetDebugInfo()
+                            ->GetFileName(i));
+
+                    auto current_file
+                        = std::filesystem::path(filename).filename().string();
                     lowercase(current_file);
 
                     for (auto& client : clients) {
-                        if (client->files.find(current_file) != client->files.end()) {
+                        if (client->files.find(current_file)
+                            != client->files.end()) {
                             client->ReportError(report, iter);
                         }
                     }
@@ -1225,6 +1320,7 @@ void DebugReport::ReportError(const IErrorReport& report, IFrameIterator& iter)
         }
     }
 
+    // Add debug logging for VSCode extension requests on error
     if (DEBUG == 1) {
         fmt::print("VSCode extension request: {}\n", report.Message());
     }
@@ -1232,27 +1328,34 @@ void DebugReport::ReportError(const IErrorReport& report, IFrameIterator& iter)
     original->ReportError(report, iter);
 }
 
-void DebugHandler(SourcePawn::IPluginContext* IPlugin, sp_debug_break_info_t& BreakInfo, const SourcePawn::IErrorReport* IErrorReport)
+void(DebugHandler)(SourcePawn::IPluginContext* IPlugin,
+    sp_debug_break_info_t& BreakInfo,
+    const SourcePawn::IErrorReport* IErrorReport)
 {
     if (!IPlugin->IsDebugging())
         return;
 
     if (!clients.empty()) {
+        /* first search already found attached hook */
         for (auto it = clients.begin(); it != clients.end(); ++it) {
             const auto& client = *it;
             if (client && client->context_ == IPlugin) {
                 try {
                     client->DebugHook(IPlugin, BreakInfo);
-                }
-                catch (DebuggerClient::debugger_stopped& ex) {
+                } catch (DebuggerClient::debugger_stopped& ex) {
+                    // it = clients.begin();
+                    // continue;
                     return;
                 }
             }
         }
 
-        for (int i = 0; i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles(); i++) {
-            auto filename = IPlugin->GetRuntime()->GetDebugInfo()->GetFileName(i);
-            auto current_file = std::filesystem::path(filename).filename().string();
+        for (int i = 0; i < IPlugin->GetRuntime()->GetDebugInfo()->NumFiles();
+            i++) {
+            auto filename
+                = IPlugin->GetRuntime()->GetDebugInfo()->GetFileName(i);
+            auto current_file
+                = std::filesystem::path(filename).filename().string();
             lowercase(current_file);
 
             for (auto it = clients.begin(); it != clients.end(); ++it) {
@@ -1260,8 +1363,7 @@ void DebugHandler(SourcePawn::IPluginContext* IPlugin, sp_debug_break_info_t& Br
                 if (client->files.find(current_file) != client->files.end()) {
                     try {
                         client->DebugHook(IPlugin, BreakInfo);
-                    }
-                    catch (DebuggerClient::debugger_stopped& ex) {
+                    } catch (DebuggerClient::debugger_stopped& ex) {
                         return;
                     }
                 }
