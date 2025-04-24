@@ -372,3 +372,4 @@ vscode/dist
 vscode/npm-debug.log
 vscode/mock-debug.txt
 vscode/*.vsix
+src/sourcepawn-bkp
