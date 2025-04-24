@@ -91,7 +91,7 @@ class TypeResolver
   void visitTypesetDecl(TypesetDecl* decl) override;
 
   void addPending(AstNode* node) {
-    work_queue_.append(node);
+    work_queue_.push_back(node);
   }
 
   Type* applyConstQualifier(TypeSpecifier* spec, Type* type);
@@ -114,10 +114,10 @@ class TypeResolver
   bool resolveConstantArraySize(ConstantEvaluator::Mode, Expression* expr, int* outp);
   void computeFixedArraySizes(TypeSpecifier* spec,
                               Type* base,
-                              Vector<Rank>& ranks,
+                              std::vector<Rank>& ranks,
                               size_t rank_index,
                               ArrayLiteral* expr);
-  Vector<Rank> fixedArrayLiteralDimensions(TypeSpecifier* spec, Type* base, Expression* expr);
+  std::vector<Rank> fixedArrayLiteralDimensions(TypeSpecifier* spec, Type* base, Expression* expr);
 
   Type* resolveTypeIfNeeded(TypeExpr& te) {
     if (te.resolved())
@@ -139,9 +139,9 @@ class TypeResolver
   PoolAllocator& pool_;
   CompileContext& cc_;
 
-  Deque<AstNode*> work_queue_;
+  std::deque<AstNode*> work_queue_;
 
-  Vector<EnumConstant*> enum_constant_stack_;
+  std::vector<EnumConstant*> enum_constant_stack_;
 };
 
 // Certain keywords, like "const", may need contextual information to finish

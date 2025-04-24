@@ -1,10 +1,13 @@
 # vim: set ts=2 sw=2 tw=99 et:
-import re
-import os, sys
 import argparse
-import subprocess
-import testutil
+import ast
 import datetime
+import os
+import platform
+import re
+import sys
+
+import testutil
 from testutil import manifest_get
 
 def main():
@@ -27,10 +30,9 @@ def main():
   parser.add_argument('--spcomp-arg', default=None, type=str, action='append',
                       dest='spcomp_args',
                       help="Add an extra argument to all spcomp invocations.")
+  parser.add_argument('--filter', default=None, type=str,
+                      help='Filter for tests with a particular name.')
   args = parser.parse_args()
-
-  if args.test and args.test.startswith('tests/'):
-    args.test = args.test[6:]
 
   plan = TestPlan(args)
   plan.find_compilers()
@@ -59,7 +61,10 @@ class TestPlan(object):
     self.shells = []
     self.tests = []
     self.modes = []
-    self.tests_path = os.path.split(__file__)[0]
+    if args.test is None:
+      self.tests_path = os.path.split(__file__)[0]
+    else:
+      self.tests_path = args.test
     self.env_ = None
 
     if self.args.coverage:
@@ -69,18 +74,12 @@ class TestPlan(object):
   def show_cli(self):
     return self.args.show_cli
 
-  arch_suffixes = [
-    '',
-    '.x64',
-  ]
   def match_arch(self, arch):
     if self.args.arch is None:
       return True
-    if self.args.arch == 'x86':
-      return arch == ''
     if self.args.arch == 'x64' or self.args.arch == 'x86_64':
-      return arch == '.x64'
-    return False
+      return arch == 'x86_64'
+    return self.args.arch == arch
 
   def find_executable(self, path):
     if os.path.exists(path):
@@ -93,37 +92,54 @@ class TestPlan(object):
       return None
     return path
 
+  def find_executables_in(self, path, name):
+    kPlatformNames = {
+        'Linux': 'linux',
+        'Darwin': 'mac',
+        'Windows': 'windows',
+    }
+
+    found = []
+    for subdir in os.listdir(path):
+      parts = subdir.split('-')
+      if len(parts) < 2:
+        continue
+      our_platform = kPlatformNames.get(platform.system(), platform.system())
+      if parts[0] != our_platform:
+        continue
+      if not self.match_arch(parts[1]):
+        continue
+
+      prefix = os.path.join(path, subdir, name)
+      full_path = self.find_executable(prefix)
+      if not full_path:
+        continue
+      found.append((parts[1], os.path.abspath(full_path)))
+    return found
+
   def find_shells(self):
-    for arch in self.arch_suffixes:
-      if not self.match_arch(arch):
-        continue
+    search_in = os.path.join(self.args.objdir, 'spshell')
+    found = self.find_executables_in(search_in, 'spshell')
 
-      path = os.path.join(self.args.objdir, 'vm', 'spshell' + arch, 'spshell')
-      path = self.find_executable(path)
-
-      if not path:
-        continue
-
+    for arch, path in found:
       env = None
       if self.args.coverage:
         env = self.env_.copy()
         env['LLVM_PROFILE_FILE'] = '{0}/spshell-%9m'.format(self.args.coverage)
 
-      path = os.path.abspath(path)
-
       rc, stdout, stderr = testutil.exec_argv([path, '--version'])
       if rc == 0 and 'JIT' in stdout:
         self.shells.append({
           'path': path,
-          'args': [],
-          'name': 'default' + arch,
+          'args': ['--validate-debug-sections'],
+          'name': 'default-' + arch,
           'env': env,
           })
 
       self.shells.append({
         'path': path,
-        'args': ['--disable-jit'],
-        'name': 'interpreter' + arch,
+        'args': ['--validate-debug-sections', '--disable-jit'],
+        'name': 'interpreter-' + arch,
         'env': env,
       })
 
@@ -134,16 +150,10 @@ class TestPlan(object):
       self.find_spcomp()
 
   def find_spcomp(self):
-    for arch in self.arch_suffixes:
-      if not self.match_arch(arch):
-        continue
+    search_in = os.path.join(self.args.objdir, 'spcomp')
+    found = self.find_executables_in(search_in, 'spcomp')
 
-      path = os.path.join(self.args.objdir, 'compiler', 'spcomp' + arch, 'spcomp')
-      path = self.find_executable(path)
-
-      if not path:
-        continue
-
+    for arch, path in found:
       env = None
       if self.args.coverage:
         env = self.env_.copy()
@@ -170,17 +180,6 @@ class TestPlan(object):
         # Emscripten takes a long time to run, so we only test the default
         # configuration.
         continue
-
-      self.modes.append({
-        'name': 'no_phopt',
-        'spcomp': spcomp,
-        'args': ['-O0'],
-      })
-      self.modes.append({
-        'name': 'pcode12',
-        'spcomp': spcomp,
-        'args': ['-x12'],
-      })
 
   def find_spcomp2(self):
     for arch in self.arch_suffixes:
@@ -231,15 +230,14 @@ class TestPlan(object):
       path = os.path.join(self.tests_path, local_path)
       if os.path.isdir(path):
         self.find_tests_impl(local_path, manifest)
-      elif path.endswith('.sp'):
-        if self.args.test is not None and not local_path.startswith(self.args.test):
-          continue
-
+      elif path.endswith('.sp') or path.endswith('.smx'):
         test = Test(**{
           'path': os.path.abspath(path),
           'manifest': manifest,
         })
         if manifest_get(manifest, test.name, 'skip') == 'true':
+          continue
+        if self.args.filter and self.args.filter not in path:
           continue
         self.tests.append(test)
 
@@ -248,11 +246,14 @@ class TestPlan(object):
 ###
 class Test(object):
   ManifestKeys = set([
-    'returnCode',
-    'warnings_are_errors',
     'compiler',
-    'force_old_parser',
+    'defines',
     'force_new_parser',
+    'force_old_parser',
+    'returnCode',
+    'type',
+    'warnings_are_errors',
+    'debug_break_line',
   ])
 
   def __init__(self, **kwargs):
@@ -273,6 +274,8 @@ class Test(object):
     smx_base_path, ext = os.path.splitext(smx_path)
     if ext == '.sp':
       self.smx_path = smx_base_path + '.smx'
+    elif ext == '.smx':
+      self.smx_path = self.path
     else:
       self.smx_path += '.smx'
 
@@ -306,31 +309,54 @@ class Test(object):
     base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.relpath(self.path, base_path)
 
+  def checkManifests(self, key, default = None):
+    return self.local_manifest_.get(key) or manifest_get(self.manifest_, self.name, key, default)
+
   @property
   def type(self):
-    return manifest_get(self.manifest_, self.name, 'type', 'runtime')
+    return self.checkManifests('type', 'runtime')
 
   @property
   def includes(self):
-    return manifest_get(self.manifest_, self.name, 'includes', [])
+    return self.checkManifests('includes', [])
 
   @property
   def warnings_are_errors(self):
-    return self.local_manifest_.get('warnings_are_errors', None) == 'true'
+    return self.checkManifests('warnings_are_errors') == 'true'
 
   @property
   def force_old_parser(self):
-    return self.local_manifest_.get('force_old_parser', None) == 'true'
+    return self.checkManifests('force_old_parser') == 'true'
 
   @property
   def force_new_parser(self):
-    return self.local_manifest_.get('force_new_parser', None) == 'true'
+    return self.checkManifests('force_new_parser') == 'true'
+
+  @property
+  def debug_break_line(self):
+    return self.local_manifest_.get('debug_break_line', None)
 
   @property
   def expectedReturnCode(self):
     if 'returnCode' in self.local_manifest_:
       return int(self.local_manifest_['returnCode'])
     return 0
+  
+  @property
+  def defines(self):
+    if 'defines' in self.local_manifest_:
+      value = self.local_manifest_['defines']
+      if isinstance(value, str):
+        try:
+          value = ast.literal_eval(value)
+          if isinstance(value, list):
+            return value
+        except:
+          pass
+
+      return [value]
+
+    return []
 
   def should_run(self, mode):
     compiler = self.local_manifest_.get('compiler', None)
@@ -342,7 +368,11 @@ class Test(object):
 
   def read_local_manifest(self):
     self.local_manifest_ = {}
-    with open(self.path, 'r') as fp:
+
+    if self.path.endswith('.smx'):
+      return
+
+    with open(self.path, 'rt', encoding='utf-8') as fp:
       for line in fp:
         if not self.process_manifest_line(line):
           break
@@ -357,6 +387,8 @@ class Test(object):
 
     key = m.group(1)
     value = m.group(2).strip()
+    if key == 'vim':
+      return True
     if key not in Test.ManifestKeys:
       raise Exception("Test {0} contains unsupported manifest key {1}".format(
         self.name, key))
@@ -372,6 +404,7 @@ class TestRunner(object):
     self.include_path = os.path.dirname(os.path.abspath(__file__))
     self.start_time_ = datetime.datetime.now()
     self.failures_ = set()
+    self.total_tests_ = 0
 
     # Walk up the test path looking for an 'include' folder.
     search_path, _ = os.path.split(self.include_path)
@@ -392,11 +425,16 @@ class TestRunner(object):
     if len(self.failures_):
       self.print_failures()
       return False
+
+    self.out("Done. {} tests passed.".format(self.total_tests_))
     return True
 
   def run_impl(self):
-    for mode in self.plan.modes:
-      self.run_mode(mode)
+    try:
+      for mode in self.plan.modes:
+        self.run_mode(mode)
+    except KeyboardInterrupt as e:
+      pass
 
   def run_mode(self, mode):
     spcomp = mode['spcomp']
@@ -414,11 +452,15 @@ class TestRunner(object):
         self.failures_.add(test)
 
   def should_compile_only(self, test):
+    if test.path.endswith('.smx'):
+      return False
     if test.type == 'compiler-output' or test.type == 'compile-only':
       return True
     return self.plan.args.compile_only
 
   def run_test(self, mode, test):
+    self.total_tests_ += 1
+
     compile_only = self.should_compile_only(test)
     if compile_only and self.plan.args.runtime_only:
       return True
@@ -426,19 +468,20 @@ class TestRunner(object):
     self.out('Begin test {0}'.format(test.path))
 
     # First run the compiler.
-    rc, stdout, stderr = self.run_compiler(mode, test)
-    if compile_only:
-      if not self.compile_ok(mode, test, rc, stdout, stderr):
+    if not test.path.endswith('.smx'):
+      rc, stdout, stderr = self.run_compiler(mode, test)
+      if compile_only:
+        if not self.compile_ok(mode, test, rc, stdout, stderr):
+          self.out_io(stderr, stdout)
+          return False
+        self.out("PASS")
+        return True
+
+      # If this is a runtime test, the compiler must pass to continue.
+      if rc != 0:
+        self.out("Compile failed, return code {0} (expected 0)".format(rc))
         self.out_io(stderr, stdout)
         return False
-      self.out("PASS")
-      return True
-
-    # If this is a runtime test, the compiler must pass to continue.
-    if rc != 0:
-      self.out("Compile failed, return code {0} (expected 0)".format(rc))
-      self.out_io(stderr, stdout)
-      return False
 
     # Run all shells we found.
     return self.run_shells(mode, test)
@@ -468,8 +511,12 @@ class TestRunner(object):
     argv += mode['spcomp']['args']
     argv += mode['args']
     argv += ['-z', '1'] # Fast compilation for tests.
+
     if test.warnings_are_errors:
       argv += ['-E']
+    for define in test.defines:
+      argv += [define]
+
     if mode['spcomp']['name'] == 'spcomp2':
       argv += ['-o', test.smx_path]
     argv += [self.fix_path(spcomp_path, test.path)]
@@ -486,6 +533,8 @@ class TestRunner(object):
   def run_shell(self, mode, shell, test):
     self.out("Running with shell ({0})".format(shell['name']))
     argv = [shell['path']] + shell['args']
+    if test.debug_break_line:
+      argv += ['--debug-break-line', test.debug_break_line]
     argv += [self.fix_path(shell['path'], test.smx_path)]
 
     rc, stdout, stderr = self.do_exec(argv, shell['env'])
@@ -501,7 +550,7 @@ class TestRunner(object):
     if test.stderr_file is not None:
       if not self.compare_output(test, 'stderr', stderr):
         return False
-        
+
     self.out("PASS")
     return True
 
@@ -524,6 +573,8 @@ class TestRunner(object):
       if os.path.exists(test.smx_path):
         self.out("FAIL: Compile unexpectedly succeeded, expected no .smx file.")
         return False
+    elif test_prefix == 'ignore':
+      return True
 
     if test_prefix == 'ok':
       return True
@@ -601,7 +652,7 @@ class TestRunner(object):
     return path
 
   def print_failures(self):
-    self.out("Failures were detected in the following tests:")
+    self.out("{} failures were detected in the following tests:".format(len(self.failures_)))
     failures = sorted([test.unique_name for test in self.failures_])
     for test in failures:
       test_path = os.path.join(os.path.split(__file__)[0], test)

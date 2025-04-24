@@ -13,9 +13,11 @@
 #ifndef _include_sourcepawn_vm_method_verifier_h_
 #define _include_sourcepawn_vm_method_verifier_h_
 
+#include <functional>
+#include <vector>
+
 #include <sp_vm_types.h>
 #include <smx/smx-v1-opcodes.h>
-#include <amtl/am-function.h>
 #include "control-flow.h"
 
 namespace sp {
@@ -27,7 +29,7 @@ class MethodVerifier final
  public:
   explicit MethodVerifier(PluginRuntime* rt, uint32_t startOffset);
 
-  typedef ke::Lambda<void(cell_t)> ExternalFuncRefCallback;
+  typedef std::function<void(cell_t)> ExternalFuncRefCallback;
   void collectExternalFuncRefs(const ExternalFuncRefCallback& callback);
 
   ke::RefPtr<ControlFlowGraph> verify();
@@ -60,14 +62,35 @@ class MethodVerifier final
 
   struct VerifyData : public IBlockData {
     VerifyData()
-     : stack_balance(0)
+     : stack_balance(0),
+       heap_scope_depth(0)
     {}
+    VerifyData(const VerifyData& other)
+     : stack_balance(other.stack_balance),
+       heap_balance(other.heap_balance),
+       tracker_balance(other.tracker_balance),
+       heap_scope_depth(other.heap_scope_depth)
+    {}
+
+    VerifyData& operator =(const VerifyData& other) {
+      stack_balance = other.stack_balance;
+      heap_balance = other.heap_balance;
+      tracker_balance = other.tracker_balance;
+      heap_scope_depth = other.heap_scope_depth;
+      return *this;
+    }
+
     uint32_t stack_balance;
-    ke::Vector<int32_t> heap_balance;
+    std::vector<int32_t> heap_balance;
+    std::vector<int32_t> tracker_balance;
+    uint32_t heap_scope_depth;
+
+    std::unique_ptr<VerifyData> entry;
   };
 
   bool handleJoins();
-  bool verifyJoin(Block* block, VerifyData* a, VerifyData* b);
+  bool mergeTracker(Block* block, VerifyData* other);
+  bool verifyJoin(VerifyData* first, VerifyData* other);
   bool verifyJoins(Block* block);
   bool pushStack(uint32_t num_cells);
   bool popStack(uint32_t num_cells);
@@ -78,7 +101,7 @@ class MethodVerifier final
   PluginRuntime* rt_;
   ke::RefPtr<ControlFlowGraph> graph_;
   Block* block_;
-  ke::Vector<Block*> verify_joins_;
+  std::vector<Block*> verify_joins_;
   uint32_t code_features_;
   uint32_t startOffset_;
   size_t memSize_;

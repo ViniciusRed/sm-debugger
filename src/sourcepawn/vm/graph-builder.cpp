@@ -83,7 +83,7 @@ GraphBuilder::scan()
       if (work_queue_.empty())
         return true;
 
-      current_ = work_queue_.popCopy();
+      current_ = ke::PopBack(&work_queue_);
       assert(!current_->ended());
 
       // Set the cip_ accordingly and proceed.
@@ -123,6 +123,11 @@ IsControlOpcode(OPCODE op)
 auto
 GraphBuilder::scanFlow() -> FlowState
 {
+  if (!more()) {
+    error(SP_ERROR_INVALID_INSTRUCTION);
+    return FlowState::Error;
+  }
+
   uint32_t cell_number = getCellNumber(cip_);
   assert(insn_bitmap_.test(cell_number));
 
@@ -149,7 +154,7 @@ GraphBuilder::scanFlow() -> FlowState
 
   switch (op) {
     case OP_RETN:
-      current_->end(insn, BlockEnd::Insn);
+      current_->end(cip_, BlockEnd::Insn);
       current_ = nullptr;
       return FlowState::Ended;
 
@@ -188,7 +193,7 @@ GraphBuilder::scanFlow() -> FlowState
       // If this is an unconditional jump, there is only one target, so end.
       if (op == OP_JUMP) {
         current_->addTarget(target_block);
-        current_->end(insn, BlockEnd::Insn);
+        current_->end(cip_, BlockEnd::Insn);
         current_ = nullptr;
         return FlowState::Ended;
       }
@@ -206,7 +211,7 @@ GraphBuilder::scanFlow() -> FlowState
       RefPtr<Block> next_block = getOrAddBlock(cip_);
       current_->addTarget(next_block);
       current_->addTarget(target_block);
-      current_->end(insn, BlockEnd::Insn);
+      current_->end(cip_, BlockEnd::Insn);
       current_ = nullptr;
       return FlowState::Ended;
     }
@@ -232,13 +237,13 @@ GraphBuilder::scanSwitchFlow(const uint8_t* insn) -> FlowState
   cell_t ncases = read();
 
   // Add the default case.
-  Vector<cell_t> cases;
-  cases.append(read());
+  std::vector<cell_t> cases;
+  cases.push_back(read());
 
   // Add all cases.
   for (cell_t i = 0; i < ncases; i++) {
     read();
-    cases.append(read());
+    cases.push_back(read());
   }
 
   // Process each case.
@@ -254,7 +259,7 @@ GraphBuilder::scanSwitchFlow(const uint8_t* insn) -> FlowState
     current_->addTarget(target_block);
   }
 
-  current_->end(insn, BlockEnd::Insn);
+  current_->end(NextInstruction(insn), BlockEnd::Insn);
   current_ = nullptr;
   return FlowState::Ended;
 }
@@ -287,7 +292,7 @@ GraphBuilder::enqueueBlock(Block* block)
   if (block->visited())
     return;
 
-  work_queue_.append(block);
+  work_queue_.push_back(block);
   block->setVisited();
 }
 
@@ -434,9 +439,9 @@ GraphBuilder::cleanup()
 
   // Find all reachable blocks, from the entrypoint.
   graph_->entry()->setVisited();
-  work_queue_.append(graph_->entry());
+  work_queue_.push_back(graph_->entry());
   while (!work_queue_.empty()) {
-    ke::RefPtr<Block> block = work_queue_.popCopy();
+    ke::RefPtr<Block> block = ke::PopBack(&work_queue_);
     assert(block->visited());
 
     if (!block->ended()) {
@@ -448,7 +453,7 @@ GraphBuilder::cleanup()
     for (const auto& successor : block->successors()) {
       if (successor->visited())
         continue;
-      work_queue_.append(successor);
+      work_queue_.push_back(successor);
       successor->setVisited();
     }
   }

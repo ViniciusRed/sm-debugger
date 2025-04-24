@@ -1,0 +1,252 @@
+SourcePawn 1.11
+---------------
+
+SourcePawn 1.11 contains a major rewrite of the compiler. This rewrite is
+intended to allow rapid feature development and improve the health and
+stability of the language. It fixes many bugs, and as a result, old programs
+may not compile.
+
+Notably, SourcePawn 1.11 does not hide errors in unused functions anymore. If a
+stock is unused, and has errors, the errors should be fixed or the stock should
+be removed.
+
+More common errors for 1.11 upgrades are listed below.
+
+## Assignment Changes
+
+The following code is no longer valid:
+
+    // error 017: undefined symbol "i"
+    int i = i;
+
+In previous versions of SourcePawn, the right-hand side of the expression was
+evaluated after creating the left-hand name. We have changed the ordering to
+eliminate a source of confusion and possible bugs. Because the right-hand side
+now evaluates first, the symbol `i` does not exist.
+
+The fix is to explicitly initialize to zero:
+
+    int i = 0;
+
+In addition, the following code is no longer valid:
+
+    static const int color[4] = { 0, 0, 0, 0 };
+
+    color[1] = 255;
+
+In previous versions, the "const" keyword was not respected. It is now properly
+implemented.
+
+## Return Value Changes
+
+It is now a warning to omit a return statement. That means the following
+examples are all problematic:
+
+    // Should return an explicit value
+    public Action OnTimer() {
+    }
+
+    // Should return an explicit value
+    public int GetNumber() {
+        if (!DoStuff()) return;
+    }
+
+To ease the transition to the new semantic checker, spcomp will emit a warning
+when the return value is an enum, boolean, or integer. Any other type is an
+error and compilation will fail.
+
+## Returning Arrays
+
+Functions that return arrays now MUST use transitional syntax. The following
+will not work:
+
+    String:GetAString() {
+        return "hello";
+    }
+
+Instead, it must be:
+
+    char[] GetAString() {
+        return "hello";
+    }
+
+## Syntax Changes
+
+Two obscure syntax options have been deprecated, and will emit a warning. Using
+the keyword `do` before a statement, and omitting parenthesis on control
+conditionals.
+
+    for int i = 0; i < 10; i++ do {
+    }
+
+    switch i do {
+    }
+
+    do {
+    } while i;
+    
+These examples should be changed to the standard syntax, which uses parentheses:
+
+    for (int i = 0; i < 10; i++) {
+    }
+
+    switch (i) {
+    }
+
+    do {
+    } while (i);
+
+## pragma changes
+
+`#pragma semicolon 1` now only affects the current file, and does not affect
+sub-files. This is to enable better compatibility with include files. This also
+makes language changes less risky for extension developers.
+
+## Array Changes
+
+Type checking of arrays has been greatly improved in SourcePawn 1.11. More
+errors will be caught and more initialization patterns are supported. Below are
+some common errors that the new compiler finds and some suggestions as to how
+to fix them.
+
+### error 183: brackets after variable name indicates a fixed-size array, but size is missing or not constant
+
+The following code will trigger this error:
+
+    stock void DoCommand(int client, char argument[] = "")
+
+When brackets `[]` follow the variable name, they indicate a fixed size. When
+they follow the type, they indicate a dynamic or unknown size. The error in
+this example is that the position indicates a fixed size, but no size was
+given. There is no way to deduce the size automatically because it's an
+argument, and the initializer only applies to default values.
+
+The fix is to use the correct bracket positioning:
+
+    stock void DoCommand(int client, char[] argument= "")
+
+### error 047: array sizes do not match, or destination array is too small
+
+There are a number of reasons why this error might appear in 1.11 in a script
+that compiled fine in earlier versions.
+
+#### String is too big
+
+Earlier versions of SourcePawn incorrectly computed the size of string arrays.
+For example, `char x[3]` was internally calculated as four bytes. This has been
+fixed in 1.11. Plugins relying on this incorrect calculation will no longer
+compile.
+
+Here are some examples of code that used to work, but don't anymore:
+
+    char a[1] = "0"; // Error: "0" is two bytes
+
+    char b[5];
+    b = IsClientInGame(client) ? "true" : "false"; // Error: "false" is 6 bytes
+
+    char buffer[4];
+    GeoipCode2(ip, buffer); // Error: char[3] is needed, but user gave char[4]
+
+For international plugins, remember that utf8 strings can occupy more bytes
+than characters. You can use sizeof() to check the true size of a string.
+
+#### Multi-dimensional with initializers
+
+The following code will no longer work and will report error 47:
+
+    char WeaponNames[][] = {"awp", "rocket_launcher"};
+    char weapon[32] = WeaponNames[0]
+
+The reason is that the final rank of the array has two different sizes, 4 bytes
+(for `"awp"`) and 16 bytes (for `"rocket_launcher"`). Therefore the size of the
+last dimension is not known at compile-time. There are a few ways to work
+around this.
+
+First, you can use a hardcoded size:
+
+    char WeaponNames[][32] = {"awp", "rocket_launcher"};
+    char weapon[32] = WeaponNames[0]
+
+Second, you can use `strcopy`:
+
+    char WeaponNames[][] = {"awp", "rocket_launcher"};
+    char weapon[32]
+    strcopy(weapon, sizeof(weapon), WeaponNames[0])
+
+### warning 241: scalar assignment to array is deprecated
+
+This warning will happen when the following pattern is detected:
+
+    int gNumKills[MAXPLAYERS + 1] = 0;
+
+The error is that `0` is a scalar (a single value) being assigned to an array,
+which is illegal. The correct syntax is:
+
+    int gNumKills[MAXPLAYERS + 1] = {0, ...};
+
+For `0` values (or `false`, or `0.0`, or `""`), an initializer is not needed at all:
+
+    int gNumKills[MAXPLAYERS + 1];
+
+Since this pattern is quite common, we special-cased it so that it still works
+in 1.11 with a warning. In future versions it may become an error.
+
+### error 101: fixed dimensions must be after the array name, not on the type
+
+The following code will trigger this error:
+
+    void GetVector(float[3] pos) {}
+
+The brackets (`[]`) are in the wrong position. Next to the type, they indicate
+an array of unknown or any size. Next to the name, they indicate a fixed size.
+The correct syntax is:
+
+    void GetVector(float pos[3]) {}
+
+### error 165: cannot create dynamic arrays in static scope - did you mean to create a fixed-length array with brackets after the variable name?
+
+The following code will trigger this error:
+
+    static float[3] sVector
+
+This is similar to error 101 above. The brackets next to the type indicate an
+array of unknown size. When declaring a local variable in legacy syntax, the
+`3` indicates a dynamic array. Dynamic arrays aren't allowed in global or
+static scope. The correct syntax is:
+
+    static float sVector[3]
+    
+## Preprocessor Changes
+
+In earlier versions of SourcePawn, the preprocessor had visibility into things it shouldn't have, like local variables and enum names. This no longer works:
+
+    enum Blah {
+    };
+    
+    #if defined Blah
+        // ...
+    #endif
+
+Instead, consider either removing your dependence on the preprocessor, or by introducing a new macro:
+
+    enum Blah {
+    };
+    #define BLAH_ENABLED
+    
+    #if defined BLAH_ENABLED
+        // ...
+    #endif
+
+The old behavior only worked in earlier compilers due to an implementation quirk. The preprocessor was sharing symbol tables with the rest of the compiler, meaning it had access to the entire language state. This kind of thing does not work at all in a proper compiler pipeline because the preprocessing stage is textual, not semantic. In fact it is an entirely separate language. So with 1.11, the preprocessor can only see preprocessor state, not language state.
+
+## C++ Changes
+
+Plugins compiled with SourcePawn 1.11 use a new internal representation for
+multi-dimensional arrays called "direct arrays". A new method,
+`IPluginRuntime::UsesDirectArrays`, has been added to detect this. For
+extensions that provide natives taking multi-dimensional arrays or invoke
+public functions with multi-dimensional arrays, it is necessary to check for
+direct arrays and just memory access appropriately.
+
+Previously, the effective address for `a[i][j]` was `a + i + a[i] + j`. When
+`UsesDirectArrays` is true, the formula is `a[i] + j`.

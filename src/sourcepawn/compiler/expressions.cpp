@@ -25,89 +25,99 @@
 #include <stdio.h>
 #include <stdlib.h> /* for _MAX_PATH */
 #include <string.h>
-#if defined FORTIFY
-#    include <alloc/fortify.h>
-#endif
-#include <amtl/am-algorithm.h>
-#include "emitter.h"
+#include "compile-context.h"
 #include "errors.h"
 #include "expressions.h"
-#include "new-parser.h"
 #include "lexer.h"
-#include "optimizer.h"
+#include "parser.h"
 #include "sc.h"
-#include "sclist.h"
 #include "sctracker.h"
-#include "scvars.h"
+#include "semantics.h"
+#include "symbols.h"
 #include "types.h"
+#include "value-inl.h"
+
+namespace sp {
+namespace cc {
 
 /* Function addresses of binary operators for signed operations */
-static void (*op1[17])(void) = {
-    os_mult, os_div, os_mod,        /* hier3, index 0 */
-    ob_add,  ob_sub,                /* hier4, index 3 */
-    ob_sal,  os_sar, ou_sar,        /* hier5, index 5 */
-    ob_and,                         /* hier6, index 8 */
-    ob_xor,                         /* hier7, index 9 */
-    ob_or,                          /* hier8, index 10 */
-    os_le,   os_ge,  os_lt,  os_gt, /* hier9, index 11 */
-    ob_eq,   ob_ne,                 /* hier10, index 15 */
+static const int op1[17] = {
+    // hier3
+    '*', '/', '%',
+    // hier4
+    '+', '-',
+    // hier5
+    tSHL, tSHR, tSHRU,
+    // hier6
+    '&',
+    // hier7
+    '^',
+    // hier8
+    '|',
+    // hier9
+    tlLE, tlGE, '<', '>',
+    // hier10
+    tlEQ, tlNE
 };
 
-// The "op1" array in sc3.cpp must have the same ordering as if these lists
-// were flattened.
-int ExpressionParser::list3[] = {'*', '/', '%', 0};
-int ExpressionParser::list4[] = {'+', '-', 0};
-int ExpressionParser::list5[] = {tSHL, tSHR, tSHRU, 0};
-int ExpressionParser::list6[] = {'&', 0};
-int ExpressionParser::list7[] = {'^', 0};
-int ExpressionParser::list8[] = {'|', 0};
-int ExpressionParser::list9[] = {tlLE, tlGE, '<', '>', 0};
-int ExpressionParser::list10[] = {tlEQ, tlNE, 0};
-int ExpressionParser::list11[] = {tlAND, 0};
-int ExpressionParser::list12[] = {tlOR, 0};
+static inline bool MatchOperator(int oper, FunctionDecl* fun, Type* type1, Type* type2,
+                                 int numparam)
+{
+    if (!oper)
+        numparam = 1;
 
-/* These two functions are defined because the functions inc() and dec() in
- * SC4.C have a different prototype than the other code generation functions.
- * The arrays for user-defined functions use the function pointers for
- * identifying what kind of operation is requested; these functions must all
- * have the same prototype. As inc() and dec() are special cases already, it
- * is simplest to add two "do-nothing" functions.
- */
-void
-user_inc(void)
-{
-}
-void
-user_dec(void)
-{
+    const auto& args = fun->args();
+    if (args.size() != size_t(numparam))
+        return false;
+
+    assert(numparam == 1 || numparam == 2);
+    Type* types[2] = { type1, type2 };
+
+    for (int i = 0; i < numparam; i++) {
+        if (args[i]->type_info().is_varargs)
+            return false;
+        if (args[i]->type_info().type != types[i])
+            return false;
+    }
+
+    if (!oper && fun->type() != type2)
+        return false;
+    return true;
 }
 
-bool
-find_userop(void (*oper)(), int tag1, int tag2, int numparam, const value* lval, UserOperation* op)
+bool find_userop(SemaContext& sc, int oper, Type* type1, Type* type2, int numparam,
+                 const value* lval, UserOperation* op)
 {
     static const char* binoperstr[] = {"*", "/", "%",  "+",  "-", "",  "",   "",  "",
                                        "",  "",  "<=", ">=", "<", ">", "==", "!="};
-    static bool binoper_savepri[] = {false, false, false, false, false, false, false, false, false,
-                                     false, false, true,  true,  true,  true,  false, false};
+    static const bool binoper_savepri[] = {false, false, false, false, false, false, false, false,
+                                           false, false, false, true,  true,  true,  true,  false,
+                                           false};
     static const char* unoperstr[] = {"!", "-", "++", "--"};
-    static void (*unopers[])(void) = {lneg, neg, user_inc, user_dec};
+    static const int unopers[] = {'!', '-', tINC, tDEC};
 
-    char opername[4] = "", symbolname[sNAMEMAX + 1];
+    char opername[4] = "";
     size_t i;
     bool savepri, savealt;
-    symbol* sym;
+
+    if (type1->isReference())
+        type1 = type1->inner();
+    if (type2 && type2->isReference())
+        type2 = type2->inner();
 
     /* since user-defined operators on untagged operands are forbidden, we have
      * a quick exit.
      */
     assert(numparam == 1 || numparam == 2);
-    if (tag1 == 0 && (numparam == 1 || tag2 == 0))
+    if (sc.cc().in_preprocessor())
+        return false;
+    if (type1->isInt() && (numparam == 1 || type2->isInt()))
         return false;
 
     savepri = savealt = false;
     /* find the name with the operator */
     if (numparam == 2) {
-        if (oper == NULL) {
+        if (oper == 0) {
             /* assignment operator: a special case */
             strcpy(opername, "=");
             if (lval != NULL && (lval->ident == iARRAYCELL || lval->ident == iARRAYCHAR))
@@ -123,7 +133,7 @@ find_userop(void (*oper)(), int tag1, int tag2, int numparam, const value* lval,
             }
         }
     } else {
-        assert(oper != NULL);
+        assert(oper);
         assert(numparam == 1);
         /* try a select group of unary operators */
         assert((sizeof unoperstr / sizeof unoperstr[0]) == (sizeof unopers / sizeof unopers[0]));
@@ -140,35 +150,36 @@ find_userop(void (*oper)(), int tag1, int tag2, int numparam, const value* lval,
     if (opername[0] == '\0')
         return false;
 
-    /* create a symbol name from the tags and the operator name */
-    assert(numparam == 1 || numparam == 2);
-    operator_symname(symbolname, opername, tag1, tag2, numparam, tag2);
-    bool swapparams = false;
-    sym = findglb(symbolname);
-    if (!sym) {
-        /* check for commutative operators */
-        if (tag1 == tag2 || oper == NULL || !commutative(oper))
-            return false; /* not commutative, cannot swap operands */
-        /* if arrived here, the operator is commutative and the tags are different,
-         * swap tags and try again
-         */
-        assert(numparam == 2); /* commutative operator must be a binary operator */
-        operator_symname(symbolname, opername, tag2, tag1, numparam, tag1);
-        swapparams = true;
-        sym = findglb(symbolname);
-        if (!sym)
-            return false;
+    // :TODO: restrict this to globals.
+    auto opername_atom = sc.cc().atom(opername);
+    Decl* chain = FindSymbol(sc, opername_atom);
+    if (!chain)
+        return false;
+
+    FunctionDecl* decl = nullptr;
+    bool swapparams;
+    bool is_commutative = commutative(oper);
+    for (auto iter = chain; iter; iter = iter->next) {
+        auto fun = iter->as<FunctionDecl>();
+        if (!fun)
+            continue;
+        fun = fun->canonical();
+
+        bool matched = MatchOperator(oper, fun, type1, type2, numparam);
+        bool swapped = false;
+        if (!matched && is_commutative && type1 != type2 && oper) {
+            matched = MatchOperator(oper, fun, type2, type1, numparam);
+            swapped = true;
+        }
+        if (matched) {
+            decl = fun;
+            swapparams = swapped;
+            break;
+        }
     }
 
-    /* check existance and the proper declaration of this function */
-    if (sym->missing || !sym->prototyped) {
-        char symname[2 * sNAMEMAX + 16]; /* allow space for user defined operators */
-        funcdisplayname(symname, sym->name());
-        if (sym->missing)
-            error(4, symname); /* function not defined */
-        if (!sym->prototyped)
-            error(71, symname); /* operator must be declared before use */
-    }
+    if (!decl)
+        return false;
 
     /* we don't want to use the redefined operator in the function that
      * redefines the operator itself, otherwise the snippet below gives
@@ -176,655 +187,381 @@ find_userop(void (*oper)(), int tag1, int tag2, int numparam, const value* lval,
      *    fixed:operator+(fixed:a, fixed:b)
      *        return a + b
      */
-    if (sym == curfunc)
-        return false;
+    if (decl == sc.func()) {
+        report(408);
+    }
 
-    if (sc_status != statSKIP)
-        markusage(sym, uREAD); /* do not mark as "used" when this call itself is skipped */
+    markusage(decl, uREAD);
 
-    op->sym = sym;
+    op->sym = decl;
     op->oper = oper;
-    op->paramspassed = (oper == NULL) ? 1 : numparam;
+    op->paramspassed = (oper == 0) ? 1 : numparam;
     op->savepri = savepri;
     op->savealt = savealt;
     op->swapparams = swapparams;
     return true;
 }
 
-void
-emit_userop(const UserOperation& user_op, value* lval)
-{
-    /* for increment and decrement operators, the symbol must first be loaded
-     * (and stored back afterwards)
-     */
-    if (user_op.oper == user_inc || user_op.oper == user_dec) {
-        assert(!user_op.savepri);
-        assert(lval != NULL);
-        if (lval->ident == iARRAYCELL || lval->ident == iARRAYCHAR)
-            pushreg(sPRI); /* save current address in PRI */
-        if (lval->ident != iACCESSOR)
-            rvalue(lval); /* get the symbol's value in PRI */
-    }
+bool checktag_string(Type* type, const value* sym1) {
+    if (sym1->type()->isArray())
+        return false;
 
-    assert(!user_op.savepri || !user_op.savealt); /* either one MAY be set, but not both */
-    if (user_op.savepri) {
-        /* the chained comparison operators require that the ALT register is
-         * unmodified, so we save it here; actually, we save PRI because the normal
-         * instruction sequence (without user operator) swaps PRI and ALT
-         */
-        pushreg(sPRI); /* right-hand operand is in PRI */
-    } else if (user_op.savealt) {
-        /* for the assignment operator, ALT may contain an address at which the
-         * result must be stored; this address must be preserved accross the
-         * call
-         */
-        assert(lval != NULL); /* this was checked earlier */
-        assert(lval->ident == iARRAYCELL || lval->ident == iARRAYCHAR); /* checked earlier */
-        pushreg(sALT);
-    }
-
-    /* push parameters, call the function */
-    switch (user_op.paramspassed) {
-        case 1:
-            pushreg(sPRI);
-            break;
-        case 2:
-            /* note that 1) a function expects that the parameters are pushed
-             * in reversed order, and 2) the left operand is in the secondary register
-             * and the right operand is in the primary register */
-            if (user_op.swapparams) {
-                pushreg(sALT);
-                pushreg(sPRI);
-            } else {
-                pushreg(sPRI);
-                pushreg(sALT);
-            }
-            break;
-        default:
-            assert(0);
-    }
-    markexpr(sPARM, NULL, 0); /* mark the end of a sub-expression */
-    assert(user_op.sym->ident == iFUNCTN);
-    ffcall(user_op.sym, user_op.paramspassed);
-
-    if (user_op.savepri || user_op.savealt)
-        popreg(sALT); /* restore the saved PRI/ALT that into ALT */
-    if (user_op.oper == user_inc || user_op.oper == user_dec) {
-        assert(lval != NULL);
-        if (lval->ident == iARRAYCELL || lval->ident == iARRAYCHAR)
-            popreg(sALT); /* restore address (in ALT) */
-        if (lval->ident != iACCESSOR) {
-            store(lval); /* store PRI in the symbol */
-            moveto1();   /* make sure PRI is restored on exit */
-        }
-    }
-}
-
-int
-check_userop(void (*oper)(void), int tag1, int tag2, int numparam, value* lval, int* resulttag)
-{
-    UserOperation user_op;
-    if (!find_userop(oper, tag1, tag2, numparam, lval, &user_op))
-        return FALSE;
-
-    sideeffect = TRUE;         /* assume functions carry out a side-effect */
-
-    assert(resulttag != NULL);
-    *resulttag = user_op.sym->tag; /* save tag of the called function */
-
-    emit_userop(user_op, lval);
-    return TRUE;
-}
-
-int
-checktag_string(int tag, const value* sym1)
-{
-    if (sym1->ident == iARRAY || sym1->ident == iREFARRAY)
-        return FALSE;
-    if ((sym1->tag == pc_tag_string && tag == 0) || (sym1->tag == 0 && tag == pc_tag_string)) {
-        return TRUE;
-    }
-    return FALSE;
-}
-
-int
-checkval_string(const value* sym1, const value* sym2)
-{
-    if (sym1->ident == iARRAY || sym2->ident == iARRAY || sym1->ident == iREFARRAY ||
-        sym2->ident == iREFARRAY)
+    if ((sym1->type()->isChar() && type->isInt()) ||
+        (sym1->type()->isInt() && type->isChar()))
     {
-        return FALSE;
+        return true;
     }
-    if ((sym1->tag == pc_tag_string && sym2->tag == 0) ||
-        (sym1->tag == 0 && sym2->tag == pc_tag_string))
+    return false;
+}
+
+bool checkval_string(const value* sym1, const value* sym2) {
+    if (sym1->type()->isArray() || sym2->type()->isArray())
+        return false;
+    if ((sym1->type()->isChar() && sym2->type()->isInt()) ||
+        (sym1->type()->isInt() && sym2->type()->isChar()))
     {
-        return TRUE;
+        return true;
     }
-
-    return FALSE;
+    return false;
 }
 
-const char*
-type_to_name(int tag)
-{
-    if (tag == 0)
-        return "int";
-    if (tag == sc_rationaltag)
-        return "float";
-    if (tag == pc_tag_string)
-        return "char";
-    if (tag == pc_anytag)
-        return "any";
-
-    Type* type = gTypes.find(tag);
-    if (!type)
-        return "unknown";
-    return type->prettyName();
+bool matchtag_string(int ident, Type* type) {
+    if (type->isArray())
+        return false;
+    return type->isChar();
 }
 
-int
-matchtag_string(int ident, int tag)
-{
-    if (ident == iARRAY || ident == iREFARRAY)
-        return FALSE;
-    return (tag == pc_tag_string) ? TRUE : FALSE;
-}
-
-static int
-obj_typeerror(int id, int tag1, int tag2)
-{
-    const char* left = pc_tagname(tag1);
-    const char* right = pc_tagname(tag2);
-    if (!left || strcmp(left, "_") == 0)
-        left = "int";
-    if (!right || strcmp(right, "_") == 0)
-        right = "int";
-    error(id, right, left);
-    return FALSE;
-}
-
-static int
-matchobjecttags(Type* formal, Type* actual, int flags)
-{
-    int formaltag = formal->tagid();
-    int actualtag = actual->tagid();
-
-    if ((flags & MATCHTAG_COMMUTATIVE) &&
-        (formaltag == pc_tag_null_t || formaltag == pc_tag_nullfunc_t))
-    {
-        // Bypass the check immediately after for non-object coercion.
-        ke::Swap(formaltag, actualtag);
-        ke::Swap(formal, actual);
-    }
-
+static bool matchobjecttags(Type* formal, Type* actual, int flags) {
     // objects never coerce to non-objects, YET.
-    if (formal->isObject() && !actual->isObject())
-        return obj_typeerror(132, formaltag, actualtag);
-
-    if (actualtag == pc_tag_nullfunc_t) {
-        // All functions are nullable. We use a separate constant for backward
-        // compatibility; plugins and extensions check -1, not 0.
-        if (formal->isFunction())
-            return TRUE;
-
-        error(154, pc_tagname(formaltag));
-        return FALSE;
+    if (formal->isObject() && !(actual->isObject() || actual->isFunction())) {
+        if (!(flags & MATCHTAG_SILENT))
+            report(132) << formal << actual;
+        return false;
     }
 
-    if (actualtag == pc_tag_null_t) {
+    if (actual->isNull()) {
         // All objects are nullable.
-        if (formal->isObject())
-            return TRUE;
+        if (formal->isFunction() || formal->isObject())
+            return true;
 
         // Some methodmaps are nullable. The nullable property is inherited
         // automatically.
-        methodmap_t* map = formal->asMethodmap();
-        if (map && map->nullable)
-            return TRUE;
+        auto map = formal->asMethodmap();
+        if (map && map->nullable())
+            return true;
 
-        error(148, pc_tagname(formaltag));
-        return FALSE;
+        if (!(flags & MATCHTAG_SILENT))
+            report(148) << formal;
+        return false;
     }
 
-    if (!formal->isObject() && actual->isObject())
-        return obj_typeerror(131, formaltag, actualtag);
+    if (!formal->isObject() && actual->isObject()) {
+        report(131) << formal << actual;
+        return false;
+    }
 
     // Every object coerces to "object".
-    if (formaltag == pc_tag_object)
-        return TRUE;
+    if (formal->isObject())
+        return true;
 
-    if (flags & MATCHTAG_COERCE)
-        return obj_typeerror(134, formaltag, actualtag);
-
-    methodmap_t* map = actual->asMethodmap();
-    for (; map; map = map->parent) {
-        if (map->tag == formaltag)
-            return TRUE;
+    if (flags & MATCHTAG_COERCE) {
+        report(134) << formal << actual;
+        return false;
     }
 
-    return obj_typeerror(133, formaltag, actualtag);
-}
-
-static int
-matchreturntag(const functag_t* formal, const functag_t* actual)
-{
-    if (formal->ret_tag == actual->ret_tag)
-        return TRUE;
-    if (formal->ret_tag == pc_tag_void) {
-        if (actual->ret_tag == 0)
-            return TRUE;
+    auto map = actual->asMethodmap();
+    for (; map; map = map->parent()) {
+        if (map->type() == formal)
+            return true;
     }
-    return FALSE;
+
+    if (!(flags & MATCHTAG_SILENT))
+        report(133) << formal << actual;
+    return false;
 }
 
-static int
-funcarg_compare(const funcarg_t* formal, const funcarg_t* actual)
-{
+static bool matchreturntag(const FunctionType* formal, const FunctionType* actual) {
+    if (formal->return_type() == actual->return_type())
+        return true;
+
+    if (formal->return_type()->isVoid()) {
+        if (actual->return_type()->isInt())
+            return true;
+    }
+    return false;
+}
+
+static bool IsValidImplicitArrayCast(Type* formal, Type* actual) {
+    // Dumb check for now. This should really do a deep type validation though.
+    // Fix this when we overhaul types in 1.12.
+    formal = formal->to<ArrayType>()->inner();
+    actual = actual->to<ArrayType>()->inner();
+    if ((formal->isAny() && !actual->isChar()) || (actual->isAny() && !formal->isChar())) {
+        return true;
+    }
+    return formal == actual;
+}
+
+static bool funcarg_compare(QualType formal, QualType actual) {
     // Check type.
-    if (actual->ident != formal->ident)
-        return FALSE;
+    if (actual == formal)
+        return true;
 
-    // Check rank.
-    if (actual->dimcount != formal->dimcount)
-        return FALSE;
+    // :TODO: replace this mess with TypeChecker.
 
-    // Check arity.
-    for (int i = 0; i < formal->dimcount; i++) {
-        if (actual->dims[i] != formal->dims[i])
-            return FALSE;
+    // Do not allow casting between different array strides, eg:
+    //   any[] to char[] is illegal.
+    Type* formal_type = *formal;
+    Type* actual_type = *actual;
+    if (formal_type->isArray()) {
+        if (!IsValidImplicitArrayCast(formal_type, actual_type))
+            return false;
+
+        for (;;) {
+            auto formal_iter = formal_type->as<ArrayType>();
+            auto actual_iter = actual_type->as<ArrayType>();
+            if (!formal_iter) {
+                if (actual_iter)
+                    return false;
+                // Neither is an array, this is ok.
+                break;
+            }
+            if (!actual_iter)
+                return false;
+
+            if (formal_iter->size() != actual_iter->size())
+                return false;
+
+            formal_type = formal_iter->inner();
+            actual_type = actual_iter->inner();
+        }
     }
 
-    // Check tags.
-    if (actual->tagcount != formal->tagcount)
-        return FALSE;
-    for (int i = 0; i < formal->tagcount; i++) {
-        // Note we invert the order we pass things to matchtag() here. If the
-        // typedef specifies base type X, and the function specifies derived
-        // type Y, we want this to type since such an assignment is valid.
-        //
-        // Most programming languages do not subtype arguments like this. We do
-        // it in SourcePawn to preserve compatibility during the Transitional
-        // Syntax effort.
-        int actual_tag = actual->tags[i];
-        int formal_tag = formal->tags[i];
-        if (!matchtag(actual_tag, formal_tag, MATCHTAG_SILENT | MATCHTAG_COERCE))
-            return FALSE;
-    }
+    if (formal_type->isReference() != actual_type->isReference())
+        return false;
 
-    return TRUE;
+    if (!matchtag(formal_type, actual_type, MATCHTAG_SILENT | MATCHTAG_FUNCARG))
+        return false;
+    return true;
 }
 
-static int
-functag_compare(const functag_t* formal, const functag_t* actual)
-{
+bool functag_compare(FunctionType* formal, FunctionType* actual) {
     // Check return types.
     if (!matchreturntag(formal, actual))
-        return FALSE;
+        return false;
 
     // Make sure there are no trailing arguments.
-    if (actual->argcount > formal->argcount)
-        return FALSE;
+    if (actual->nargs() > formal->nargs())
+        return false;
+    if (actual->variadic() != formal->variadic())
+        return false;
 
     // Check arguments.
-    for (int i = 0; i < formal->argcount; i++) {
-        const funcarg_t* formal_arg = &formal->args[i];
+    for (size_t i = 0; i < formal->nargs(); i++) {
+        auto formal_arg = formal->arg_type(i);
 
-        if (i >= actual->argcount) {
-            if (formal_arg->ommittable)
-                return TRUE;
-            return FALSE;
-        }
+        if (i >= actual->nargs())
+            return false;
 
-        const funcarg_t* actual_arg = &actual->args[i];
+        auto actual_arg = actual->arg_type(i);
         if (!funcarg_compare(formal_arg, actual_arg))
-            return FALSE;
+            return false;
     }
-
-    return TRUE;
+    return true;
 }
 
-static int
-matchfunctags(Type* formal, Type* actual)
-{
-    int formaltag = formal->tagid();
-    int actualtag = actual->tagid();
+static bool matchfunctags(Type* formal, Type* actual) {
+    if (formal->isCanonicalFunction() && actual->isFunction())
+        return true;
 
-    if (formaltag == pc_functag && actual->isFunction())
-        return TRUE;
-
-    if (actualtag == pc_tag_nullfunc_t)
-        return TRUE;
+    if (actual->isNull())
+        return true;
 
     if (!actual->isFunction())
-        return FALSE;
+        return false;
 
-    functag_t* actualfn = functag_find_intrinsic(actualtag);
+    auto actual_fe = actual->asFunction();
+    if (!actual_fe || actual_fe->entries.empty())
+        return false;
+
+    FunctionType* actualfn = actual_fe->entries.back();
     if (!actualfn)
-        return FALSE;
+        return false; 
 
     funcenum_t* e = formal->toFunction();
     if (!e)
-        return FALSE;
+        return false;
 
     for (const auto& formalfn : e->entries) {
-        if (functag_compare(formalfn.get(), actualfn))
-            return TRUE;
+        if (functag_compare(formalfn, actualfn))
+            return true;
     }
-
-    return FALSE;
+    return false;
 }
 
-int
-matchtag(int formaltag, int actualtag, int flags)
-{
-    if (formaltag == actualtag)
-        return TRUE;
+bool HasTagOnInheritanceChain(Type* type, Type* other) {
+    auto map = type->asMethodmap();
+    if (!map)
+        return false;
+    for (; map; map = map->parent()) {
+        if (map->type() == other)
+            return true;
+    }
+    return false;
+}
 
-    Type* actual = gTypes.find(actualtag);
-    Type* formal = gTypes.find(formaltag);
-    assert(actual && formal);
+bool matchtag(Type* formal, Type* actual, int flags) {
+    Type* given_formal = formal;
+    Type* given_actual = actual;
 
-    if (formaltag == pc_tag_string && actualtag == 0)
-        return TRUE;
+    if (flags & MATCHTAG_COERCE) {
+        if (formal->isReference())
+            formal = formal->inner();
+        if (actual->isReference())
+            actual = actual->inner();
+    }
+
+    if (formal == actual)
+        return true;
+
+    if (formal->isChar() && actual->isInt())
+        return true;
 
     if (formal->isObject() || actual->isObject())
         return matchobjecttags(formal, actual, flags);
 
     if (actual->isFunction() && !formal->isFunction()) {
         // We're being given a function, but the destination is not a function.
-        error(130);
-        return FALSE;
+        report(130);
+        return false;
     }
 
-    /* if the formal tag is zero and the actual tag is not "fixed", the actual
-     * tag is "coerced" to zero
-     */
-    if ((flags & MATCHTAG_COERCE) && !formaltag && actual && !actual->isFixed()) {
-        return TRUE;
+    if (formal->asEnumStruct() || actual->asEnumStruct()) {
+        if (formal != actual) {
+            report(134) << given_formal << given_actual;
+            return false;
+        }
+        return true;
     }
 
-    if (formaltag == pc_anytag || actualtag == pc_anytag)
-        return TRUE;
+    // int coerces to bool/any.
+    if ((flags & MATCHTAG_COERCE) && formal->isInt() && actual->coercesFromInt())
+        return true;
+
+    if (actual->isAny())
+        return true;
+
+    // We allow this even on function signature checks as a convenient shorthand,
+    // even though it violates standard contravariance rules.
+    if (formal->isAny())
+        return true;
 
     if (formal->isFunction()) {
         if (!matchfunctags(formal, actual)) {
-            error(100);
-            return FALSE;
+            report(100);
+            return false;
         }
-        return TRUE;
+        return true;
     }
 
-    if (flags & (MATCHTAG_COERCE | MATCHTAG_DEDUCE)) {
+    if (flags & (MATCHTAG_COERCE | MATCHTAG_DEDUCE | MATCHTAG_FUNCARG)) {
         // See if the tag has a methodmap associated with it. If so, see if the given
         // tag is anywhere on the inheritance chain.
-        if (methodmap_t* map = actual->asMethodmap()) {
-            for (; map; map = map->parent) {
-                if (map->tag == formaltag)
-                    return TRUE;
-            }
-        }
+        if (HasTagOnInheritanceChain(actual, formal))
+            return true;
+
+        // As a special exception to the "any" rule above, we allow the inverse
+        // to succeed for signature matching. This is a convenience and allows
+        // something like:
+        //
+        //   void f(DataPack x);
+        //   void g(void f(Handle h), Handle h) {
+        //     f(h);
+        //   }
+        //
+        // In the future, we can insert a runtime check here. For now, we can't,
+        // but we allow it anyway.
+        if ((flags & MATCHTAG_FUNCARG) && HasTagOnInheritanceChain(formal, actual))
+            return true;
+    }
+
+    if (flags & MATCHTAG_ENUM_ASSN) {
+        if (formal->isEnum() && actual->isInt())
+            return true;
     }
 
     if (!(flags & MATCHTAG_SILENT))
-        error(213);
-    return FALSE;
+        report(213) << given_formal << given_actual;
+    return false;
 }
 
-/*
- *  Searches for a binary operator a list of operators. The list is stored in
- *  the array "list". The last entry in the list should be set to 0.
- *
- *  The index of an operator in "list" (if found) is returned in "opidx". If
- *  no operator is found, nextop() returns 0.
- *
- *  If an operator is found in the expression, it cannot be used in a function
- *  call with omitted parantheses. Mark this...
- */
-int
-ExpressionParser::nextop(int* opidx, int* list)
-{
-    *opidx = 0;
-    while (*list) {
-        if (matchtoken(*list)) {
-            return TRUE; /* found! */
-        } else {
-            list += 1;
-            *opidx += 1;
-        }
-    }
-    return FALSE; /* entire list scanned, nothing found */
-}
-
-int
-findnamedarg(arginfo* arg, const char* name)
-{
-    int i;
-
-    for (i = 0; arg[i].ident != 0 && arg[i].ident != iVARARGS; i++)
-        if (strcmp(arg[i].name, name) == 0)
-            return i;
-    return -1;
+bool matchtag_commutative(Type* formal, Type* actual, int flags) {
+    if (matchtag(formal, actual, flags | MATCHTAG_SILENT))
+        return true;
+    if (matchtag(actual, formal, flags | MATCHTAG_SILENT))
+        return false;
+    // Report the error.
+    return matchtag(formal, actual, flags);
 }
 
 cell
-array_totalsize(symbol* sym)
+calc(cell left, int oper_tok, cell right, char* boolresult)
 {
-    cell length;
-
-    assert(sym != NULL);
-    assert(sym->ident == iARRAY || sym->ident == iREFARRAY);
-    length = sym->dim.array.length;
-    if (sym->dim.array.level > 0) {
-        cell sublength = array_totalsize(sym->array_child());
-        if (sublength > 0)
-            length = length + length * sublength;
-        else
-            length = 0;
+    switch (oper_tok) {
+        case '|':
+            return (left | right);
+        case '^':
+            return (left ^ right);
+        case '&':
+            return (left & right);
+        case tlEQ:
+            return (left == right);
+        case tlNE:
+            return (left != right);
+        case tSHR:
+            return (left >> (int)right);
+        case tSHRU:
+            return ((ucell)left >> (ucell)right);
+        case tSHL:
+            return ((ucell)left << (int)right);
+        case '+':
+            return (left + right);
+        case '-':
+            return (left - right);
+        case '*':
+            return (left * right);
+        case '/':
+            if (right == 0) {
+                report(29);
+                return 0;
+            }
+            return left / right;
+        case '%':
+            if (right == 0) {
+                report(29);
+                return 0;
+            }
+            return left % right;
     }
-    return length;
-}
-
-cell
-array_levelsize(symbol* sym, int level)
-{
-    assert(sym != NULL);
-    assert(sym->ident == iARRAY || sym->ident == iREFARRAY);
-    assert(level <= sym->dim.array.level);
-    while (level-- > 0) {
-        sym = sym->array_child();
-        assert(sym != NULL);
-    }
-    return (sym->dim.array.slength ? sym->dim.array.slength : sym->dim.array.length);
-}
-
-static void
-checkfunction(const value* lval)
-{
-    symbol* sym = lval->sym;
-
-    if (sym == NULL || (sym->ident != iFUNCTN))
-        return; /* no known symbol, or not a function result */
-
-    if (sym->defined) {
-        /* function is defined, can now check the return value (but make an
-         * exception for directly recursive functions)
-         */
-        if (sym != curfunc && !sym->retvalue) {
-            char symname[2 * sNAMEMAX + 16]; /* allow space for user defined operators */
-            funcdisplayname(symname, sym->name());
-            error(209, symname); /* function should return a value */
-        }
-    } else {
-        /* function not yet defined, set */
-        sym->retvalue = true;    /* make sure that a future implementation of
-                                  * the function uses "return <value>" */
-    }
-}
-
-static cell
-flooreddiv(cell a, cell b, int return_remainder)
-{
-    cell q, r;
-
-    if (b == 0) {
-        error(29);
-        return 0;
-    }
-/* first implement truncated division in a portable way */
-#define IABS(a) ((a) >= 0 ? (a) : (-a))
-    q = IABS(a) / IABS(b);
-    if ((cell)(a ^ b) < 0)
-        q = -q;    /* swap sign if either "a" or "b" is negative (but not both) */
-    r = a - q * b; /* calculate the matching remainder */
-    /* now "fiddle" with the values to get floored division */
-    if (r != 0 && (cell)(r ^ b) < 0) {
-        q--;
-        r += b;
-    }
-    return return_remainder ? r : q;
-}
-
-cell
-calc(cell left, void (*oper)(), cell right, char* boolresult)
-{
-    if (oper == ob_or)
-        return (left | right);
-    else if (oper == ob_xor)
-        return (left ^ right);
-    else if (oper == ob_and)
-        return (left & right);
-    else if (oper == ob_eq)
-        return (left == right);
-    else if (oper == ob_ne)
-        return (left != right);
-    else if (oper == os_sar)
-        return (left >> (int)right);
-    else if (oper == ou_sar)
-        return ((ucell)left >> (ucell)right);
-    else if (oper == ob_sal)
-        return ((ucell)left << (int)right);
-    else if (oper == ob_add)
-        return (left + right);
-    else if (oper == ob_sub)
-        return (left - right);
-    else if (oper == os_mult)
-        return (left * right);
-    else if (oper == os_div)
-        return flooreddiv(left, right, 0);
-    else if (oper == os_mod)
-        return flooreddiv(left, right, 1);
     assert(false);
-    error(29); /* invalid expression, assumed 0 (this should never occur) */
+    report(29); /* invalid expression, assumed 0 (this should never occur) */
     return 0;
 }
 
-int
-lvalexpr(svalue* sval)
-{
-    memset(sval, 0, sizeof(*sval));
-
-    errorset(sEXPRMARK, 0);
-
-    Parser parser;
-    sval->lvalue = parser.expression(&sval->val);
-
-    errorset(sEXPRRELEASE, 0);
-
-    return sval->val.ident;
+bool IsValidIndexType(Type* type) {
+    return type->isInt() || type->isAny() || type->isChar() || type->isEnum();
 }
 
-int
-expression(cell* val, int* tag, symbol** symptr, int chkfuncresult, value* _lval)
-{
-    value lval = {0};
-    pushheaplist();
+bool checktag(Type* type, Type* expr_type) {
+    AutoCountErrors errors;
 
-    Parser parser;
-    int lvalue = parser.expression(&lval);
-    if (lvalue)
-        rvalue(&lval);
-    /* scrap any arrays left on the heap */
-    popheaplist(true);
-
-    if (lval.ident == iCONSTEXPR && val != NULL) /* constant expression */
-        *val = lval.constval;
-    if (tag != NULL)
-        *tag = lval.tag;
-    if (symptr != NULL)
-        *symptr = lval.sym;
-    if (chkfuncresult)
-        checkfunction(&lval);
-    if (_lval)
-        *_lval = lval;
-    return lval.ident;
-}
-
-bool
-is_valid_index_tag(int tag)
-{
-    if (tag == 0 || tag == pc_anytag)
-        return true;
-
-    Type* idx_type = gTypes.find(tag);
-    return idx_type->isEnum();
-}
-
-void
-setdefarray(cell* string, cell size, cell array_sz, cell* dataaddr, int fconst)
-{
-    /* The routine must copy the default array data onto the heap, as to avoid
-     * that a function can change the default value. An optimization is that
-     * the default array data is "dumped" into the data segment only once (on the
-     * first use).
-     */
-    /* check whether to dump the default array */
-    assert(dataaddr != NULL);
-    if (sc_status == statWRITE && *dataaddr < 0) {
-        int i;
-        *dataaddr = (litidx + glb_declared) * sizeof(cell);
-        for (i = 0; i < size; i++)
-            litadd(*string++);
-    }
-
-    /* if the function is known not to modify the array (meaning that it also
-     * does not modify the default value), directly pass the address of the
-     * array in the data segment.
-     */
-    if (fconst || !string) {
-        ldconst(*dataaddr, sPRI);
-    } else {
-        /* Generate the code:
-         *  CONST.pri dataaddr                ;address of the default array data
-         *  HEAP      array_sz*sizeof(cell)   ;heap address in ALT
-         *  MOVS      size*sizeof(cell)       ;copy data from PRI to ALT
-         *  MOVE.PRI                          ;PRI = address on the heap
-         */
-        ldconst(*dataaddr, sPRI);
-        /* "array_sz" is the size of the argument (the value between the brackets
-         * in the declaration), "size" is the size of the default array data.
-         */
-        assert(array_sz >= size);
-        modheap((int)array_sz * sizeof(cell));
-        markheap(MEMUSE_STATIC, array_sz);
-        /* ??? should perhaps fill with zeros first */
-        memcopy(size * sizeof(cell));
-        moveto1();
-    }
-}
-
-int
-checktag(int tag, int exprtag)
-{
-    int errcount = errnum;
-
-    if (matchtag(tag, exprtag, MATCHTAG_COERCE | MATCHTAG_SILENT))
-        return TRUE; /* matching tag */
+    if (matchtag(type, expr_type, MATCHTAG_COERCE))
+        return true; /* matching tag */
 
     // If matchtag() didn't error, report an error.
-    if (errnum == errcount)
-        error(213);
-
-    return FALSE; /* no tag matched */
+    if (errors.ok())
+        report(213) << type << expr_type;
+    return false;
 }
 
 /*  commutative
@@ -844,8 +581,21 @@ checktag(int tag, int exprtag)
  *  is read into the secondary register immediately.
  */
 int
-commutative(void (*oper)())
+commutative(int oper)
 {
-    return oper == ob_add || oper == os_mult || oper == ob_eq || oper == ob_ne || oper == ob_and ||
-           oper == ob_xor || oper == ob_or;
+    switch (oper) {
+        case '+':
+        case '*':
+        case tlEQ:
+        case tlNE:
+        case '&':
+        case '^':
+        case '|':
+            return true;
+        default:
+            return false;
+    }
 }
+
+} // namespace cc
+} // namespace sp

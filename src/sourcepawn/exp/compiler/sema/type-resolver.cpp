@@ -15,6 +15,8 @@
 //
 // You should have received a copy of the GNU General Public License along with
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
+#include <algorithm>
+
 #include "type-resolver.h"
 #include "compile-context.h"
 #include "compile-phases.h"
@@ -28,16 +30,16 @@ template <typename T>
 class AutoPush
 {
  public:
-  AutoPush(Vector<T>& stack, const T& item)
+  AutoPush(std::vector<T>& stack, const T& item)
    : stack_(stack)
   {
-    stack_.append(item);
+    stack_.push_back(item);
   }
   ~AutoPush() {
-    stack_.pop();
+    stack_.pop_back();
   }
  private:
-  Vector<T>& stack_;
+  std::vector<T>& stack_;
 };
 
 // Type Resolution ensures that any type specifier has a bound type, and that
@@ -126,9 +128,9 @@ TypeResolver::TypeResolver(CompileContext& cc)
 bool
 TypeResolver::analyze()
 {
-  printf("unresolved type queue size: %d\n", int(work_queue_.length()));
+  printf("unresolved type queue size: %d\n", int(work_queue_.size()));
   while (!work_queue_.empty()) {
-    AstNode* node = work_queue_.popFrontCopy();
+    AstNode* node = PopFront(&work_queue_);
     node->accept(this);
 
     if (!cc_.canContinueProcessing())
@@ -370,7 +372,7 @@ TypeResolver::visitEnumStatement(EnumStatement* node)
   Type* type = node->sym()->type();
 
   int value = 0;
-  for (size_t i = 0; i < node->entries()->length(); i++) {
+  for (size_t i = 0; i < node->entries()->size(); i++) {
     EnumConstant* cs = node->entries()->at(i);
     if (cs->expression()) {
       // We may have already resolved a value, for example:
@@ -541,7 +543,7 @@ TypeResolver::visitTypesetDecl(TypesetDecl* decl)
   if (!decl->isResolved())
     return;
 
-  for (size_t i = 0; i < decl->types()->length(); i++) {
+  for (size_t i = 0; i < decl->types()->size(); i++) {
     TypeExpr& te = decl->types()->at(i).te;
     resolveTypeIfNeeded(te);
   }
@@ -550,8 +552,8 @@ TypeResolver::visitTypesetDecl(TypesetDecl* decl)
     return;
 
   TypesetType::TypeList* list =
-    new (pool_) TypesetType::TypeList(decl->types()->length());
-  for (size_t i = 0; i < list->length(); i++) {
+    new (pool_) TypesetType::TypeList(decl->types()->size());
+  for (size_t i = 0; i < list->size(); i++) {
     TypesetDecl::Entry& entry = decl->types()->at(i);
     list->at(i) = entry.te.resolved();
   }
@@ -570,7 +572,7 @@ TypeResolver::verifyTypeset(TypesetDecl* decl)
   // Verify that types aren't duplicated. This is an O(n^2) algorithm - we
   // assume N will be very small.
   TypesetDecl::Entries* types = decl->types();
-  for (size_t i = 0; i < types->length(); i++) {
+  for (size_t i = 0; i < types->size(); i++) {
     TypesetDecl::Entry& entry = types->at(i);
     Type* current = entry.te.resolved();
 
@@ -647,16 +649,16 @@ TypeResolver::resolveConstantArraySize(ConstantEvaluator::Mode mode,
 void
 TypeResolver::computeFixedArraySizes(TypeSpecifier* spec,
                                      Type* base,
-                                     Vector<Rank>& ranks,
+                                     std::vector<Rank>& ranks,
                                      size_t rank_index,
                                      ArrayLiteral* list)
 {
   // :TODO: test when literals are too deeply nested
-  if (rank_index >= ranks.length())
+  if (rank_index >= ranks.size())
     return;
 
   Rank& rank = ranks[rank_index];
-  for (size_t i = 0; i < list->expressions()->length(); i++) {
+  for (size_t i = 0; i < list->expressions()->size(); i++) {
     Expression* expr = list->expressions()->at(i);
     int size = -1;
     if (ArrayLiteral* lit = expr->asArrayLiteral()) {
@@ -695,7 +697,7 @@ TypeResolver::computeFixedArraySizes(TypeSpecifier* spec,
       if (base->isPrimitive(PrimitiveType::Char)) {
         // Strings are null-terminated, so we pick the maximum size of any
         // entry in the last dimension.
-        rank.size = ke::Max(rank.size, size);
+        rank.size = std::max(rank.size, size);
       } else if (rank.size != size) {
         rank.status = RankStatus::Indeterminate;
 
@@ -705,20 +707,20 @@ TypeResolver::computeFixedArraySizes(TypeSpecifier* spec,
   }
 }
 
-Vector<Rank>
+std::vector<Rank>
 TypeResolver::fixedArrayLiteralDimensions(TypeSpecifier* spec, Type* base, Expression* init)
 {
-  Vector<Rank> ranks;
+  std::vector<Rank> ranks;
   for (size_t i = 0; i < spec->rank(); i++) {
     Rank rank;
     if (spec->sizeOfRank(i))
       rank.status = RankStatus::Determinate;
-    ranks.append(rank);
+    ranks.push_back(rank);
   }
 
   // Peel off dimensions where the size is already known.
   while (!ranks.empty() && ranks.back().status == RankStatus::Determinate)
-    ranks.pop();
+    ranks.pop_back();
 
   if (ranks.empty())
     return ranks;
@@ -747,7 +749,7 @@ TypeResolver::fixedArrayLiteralDimensions(TypeSpecifier* spec, Type* base, Expre
     ranks[0].status = RankStatus::Computed;
     ranks[0].size = lit->arrayLength();
   }
-  if (ranks.length() > 1)
+  if (ranks.size() > 1)
     computeFixedArraySizes(spec, base, ranks, 1, lit);
 
   // If we have no indeterminate arrays, then everything should have been
@@ -756,7 +758,7 @@ TypeResolver::fixedArrayLiteralDimensions(TypeSpecifier* spec, Type* base, Expre
 #if !defined(NDEBUG)
   bool has_indeterminate = false;
   bool has_unvisited = false;
-  for (size_t i = 0; i < ranks.length(); i++) {
+  for (size_t i = 0; i < ranks.size(); i++) {
     if (ranks[i].status == RankStatus::Indeterminate)
       has_indeterminate = true;
     else if (ranks[i].status == RankStatus::Unvisited)
@@ -775,14 +777,14 @@ void
 TypeResolver::resolveTypesInSignature(FunctionSignature* sig)
 {
   resolveType(sig->returnType());
-  for (size_t i = 0; i < sig->parameters()->length(); i++) {
+  for (size_t i = 0; i < sig->parameters()->size(); i++) {
     VarDecl* param = sig->parameters()->at(i);
 
     // We should not have variadic arguments on anything but the last type. It
     // is hard to assert this anywhere else in TypeResolver unfortunately.
 #if !defined(NDEBUG)
     if (TypeSpecifier* spec = param->te().spec()) {
-      if (i != sig->parameters()->length() - 1)
+      if (i != sig->parameters()->size() - 1)
         assert(!spec->isVariadic());
     }
 #endif
@@ -1016,20 +1018,20 @@ TypeResolver::resolveArrayComponentTypes(TypeSpecifier* spec, Type* type, TypeSp
   // any, and track whether any of the values were not constant. Note that
   // if a rank is missing a size expression, we might still try to infer it
   // later, so all_constant stays true even if no ranks have sizes.
-  ke::Vector<int> given_rank_sizes;
+  std::vector<int> given_rank_sizes;
   bool all_constant = true;
   for (size_t i = 0; i < spec->rank(); i++) {
     int rank_size = ArrayType::kUnsized;
     Expression* expr = spec->sizeOfRank(i);
     if (expr && !resolveConstantArraySize(mode, expr, &rank_size))
       all_constant = false;
-    given_rank_sizes.append(rank_size);
+    given_rank_sizes.push_back(rank_size);
   }
 
   // Try to also infer the sizes of ranks from an initializer. This is used
   // only when the entire array is fixed-size, and only when the rank size
   // was not specified.
-  Vector<Rank> inferred_sizes;
+  std::vector<Rank> inferred_sizes;
   if (initializer && all_constant)
     inferred_sizes = fixedArrayLiteralDimensions(spec, type, initializer);
 
@@ -1049,7 +1051,7 @@ TypeResolver::resolveArrayComponentTypes(TypeSpecifier* spec, Type* type, TypeSp
       // don't report any inconsistencies here.
       if (all_constant)
         rank_size = given_rank_sizes[rank_index];
-    } else if (rank_index < inferred_sizes.length()) {
+    } else if (rank_index < inferred_sizes.size()) {
       // Should either be an old-style or fixed-array style local or global
       // variable.
       assert(spec->isOldDecl() || spec->hasPostDims());

@@ -1,0 +1,31 @@
+git:
+        - https://github.com/dysphie/nmrih-team-healing scripting/nmrih-team-healing.sp
+        - https://github.com/dysphie/sm-map-translator scripting/map-translator.sp
+        - https://github.com/dysphie/nmrih-voicecmd-block nmrih-voicecmd-block.sp
+        - https://github.com/dysphie/nmrih-qol-ex scripting/qol.sp
+        - https://github.com/Bara/fuckZones addons/sourcemod/scripting/fuckZones.sp
+        - https://github.com/JoinedSenses/SM-ShowTriggers-Redux scripting/showtriggers.sp
+        - https://github.com/JoinedSenses/SM-ConnectionData scripting/connectiondata.sp
+
+includes:
+        - https://github.com/alliedmodders/sourcemod plugins/include
+        - https://github.com/bcserv/smlib scripting/include
+        - https://github.com/peace-maker/DHooks2 sourcemod_files/scripting/include
+        - https://github.com/DoctorMcKay/sourcemod-plugins scripting/include
+        - https://github.com/FlaminSarge/tf2attributes ./
+        - https://github.com/Steell/Freak-Fortress-2 plugin/addons/sourcemod/scripting/include
+        - https://github.com/Bara/Multi-Colors addons/sourcemod/scripting/include
+        - https://github.com/asherkin/TF2Items pawn
+        - https://github.com/Impact123/AutoExecConfig ./
+        - https://github.com/asherkin/SteamTools plugin
+        - https://github.com/JoinedSenses/sm-ext-socket scripting/include
+        - https://github.com/KyleSanderson/SteamWorks Pawn/includes
+        - https://github.com/dvarnai/store-plugin addons/sourcemod/scripting/include
+        - https://github.com/ErikMinekus/sm-ripext pawn/scripting/include
+        - https://github.com/sbpp/sourcebans-pp game/addons/sourcemod/scripting/include
+        - https://github.com/Deathknife/sourcemod-discord include
+        - https://github.com/Bara/fuckZones addons/sourcemod/scripting/include
+        
+disabled:
+        # does not compile w/ 1.12
+        - https://github.com/thraaawn/SMJansson pawn/scripting/include

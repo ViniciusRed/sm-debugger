@@ -20,6 +20,8 @@
 
 #include <amtl/am-string.h>
 
+#include <string>
+
 namespace sp {
 
 class StringPool;
@@ -32,19 +34,24 @@ class Atom
  private:
   Atom(const char* str, size_t len)
    : str_(str, len)
-  {
-  }
+  {}
+  Atom(const Atom&) = delete;
+
+  Atom& operator =(const Atom&) = delete;
 
  public:
   size_t length() const {
-    return str_.length();
+    return str_.size();
   }
   const char* chars() const {
-    return str_.chars();
+    return str_.c_str();
+  }
+  const std::string& str() const {
+    return str_;
   }
 
  private:
-  ke::AString str_;
+  std::string str_;
 };
 
 } // namespace sp

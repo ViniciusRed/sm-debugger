@@ -85,10 +85,10 @@ struct smx_rtti_method {
     uint32_t pcode_end;
 
     // Method signature; offset into rtti.data. The encoding at this offset is:
-    //    FormalArgs    uint8
-    //    Variadic?     uint8
-    //    ReturnType    <return-type>
-    //    Params*       <param>
+    //    FormalArgs      uint8
+    //    LegacyVariadic? uint8
+    //    ReturnType      <return-type>
+    //    Params*         <param>
     //
     // <return-type> must be kVoid or a <type>.
     // <param> must be: kByRef? <type>
@@ -131,7 +131,7 @@ struct smx_rtti_enumstruct {
     // Index into the name table.
     uint32_t name;
 
-    // First row in the rtti.es_fields table. Rows up to the next
+    // First row in the rtti.enumstruct_fields table. Rows up to the next
     // enumstruct's first row, or the end of the enumstruct table, are
     // owned by this entry.
     uint32_t first_field;
@@ -140,7 +140,7 @@ struct smx_rtti_enumstruct {
     uint32_t size;
 };
 
-// The rtti.es_fields table has the following row structure:
+// The rtti.enumstruct_fields table has the following row structure:
 struct smx_rtti_es_field {
     // Index into the name table.
     uint32_t name;
@@ -182,6 +182,8 @@ struct smx_rtti_field {
     // Type id.
     uint32_t type_id;
 };
+
+static const uint32_t kClassDefFlags_TypeMask = 0x3;
 
 static const uint32_t kClassDefType_Struct = 0x0;
 
@@ -252,8 +254,9 @@ static const uint8_t kEnumStruct = 0x46; // rtti.enumstructs
 
 // For function signatures, indicating no return value.
 static const uint8_t kVoid = 0x70;
-// For functions, indicating the last argument of a function is variadic.
-static const uint8_t kVariadic = 0x71;
+// For functions, indicating the last argument of a function is variadic, and is
+// unnamed and untyped.
+static const uint8_t kLegacyVariadic = 0x71;
 // For parameters, indicating pass-by-ref.
 static const uint8_t kByRef = 0x72;
 // For reference and compound types, indicating const.
@@ -316,6 +319,7 @@ static const uint8_t kVarClass_Global = 0x0;
 static const uint8_t kVarClass_Local = 0x1;
 static const uint8_t kVarClass_Static = 0x2;
 static const uint8_t kVarClass_Arg = 0x3;
+static const uint8_t kVarClass_Max = kVarClass_Arg;
 
 #pragma pack(pop)
 

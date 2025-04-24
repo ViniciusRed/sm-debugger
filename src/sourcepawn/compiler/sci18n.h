@@ -1,4 +1,4 @@
-// vim: set ts=8 sts=2 sw=2 tw=99 et:
+// vim: set ts=8 sts=4 sw=4 tw=99 et:
 //
 //  Copyright (c) ITB CompuPhase, 1997-2006
 //
@@ -19,7 +19,21 @@
 //  3.  This notice may not be removed or altered from any source distribution.
 #pragma once
 
-#include "amx.h"
+#include <string>
 
-cell get_utf8_char(const unsigned char* string, const unsigned char** endptr);
-void skip_utf8_bom(void* fp);
+#include "source-file.h"
+
+void UnicodeCodepointToUtf8(ucell codepoint, std::string* out);
+
+static inline bool IsSpace(char c) {
+    // msvcrt doesn't like negative values.
+    return c > 0 && ::isspace(c);
+}
+
+static inline bool IsNewline(char c) {
+    return c == '\r' || c == '\n';
+}
+
+static inline bool IsDigit(char c) {
+    return c >= '0' && c <= '9';
+}

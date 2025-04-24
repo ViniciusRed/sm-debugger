@@ -1,6 +1,6 @@
 // vim: set ts=4 sw=4 tw=99 noet:
 // 
-// Copyright (C) 2006-2015 AlliedModders LLC
+// Copyright (C) 2006-2018 AlliedModders LLC
 // 
 // This file is part of SourcePawn. SourcePawn is free software: you can
 // redistribute it and/or modify it under the terms of the GNU General Public
@@ -13,102 +13,148 @@
 #ifndef _INCLUDE_SOURCEPAWN_VM_DEBUG_API_H_
 #define _INCLUDE_SOURCEPAWN_VM_DEBUG_API_H_
 
-/**
-* @file sp_vm_debug_api.h
-* @brief Contains all of the object structures used to interface with the experimental sourcepawn console debugger.
-*/
+#include "sp_vm_types.h"
 
-#include <am-vector.h>
-
-// This is subject to change.
-#define SOURCEPAWN_CONSOLE_DEBUGGER_API_VERSION 0x01
+// Current version of the IDebugSymbol interface.
+#define SOURCEPAWN_DEBUG_SYMBOL_VERSION 0x001
+// Current version of the ISymbolType interface.
+#define SOURCEPAWN_DEBUG_TYPE_VERSION 0x001
 
 namespace SourcePawn
 {
-  class IPluginContext;
+  class ISymbolType;
 
-  // @brief Represents a debug breakpoint in a plugin.
-  class IBreakpoint
-  {
+  // Represents an enum struct field of an enum struct type.
+  class IEnumStructField {
   public:
+    // @brief Returns the name of the field.
+    virtual const char* name() const = 0;
 
-    // @brief Returns the name of the symbol (function) the breakpoint was set on if any.
-    virtual const char *name() = 0;
+    // @brief Returns field offset from the base address, in bytes.
+    virtual uint32_t offset() const = 0;
 
-    // @brief Returns the name of the file in which the line of the breakpoint is.
-    virtual const char *filename() = 0;
-    
-    // @brief Returns the line in the source file of the breakpoint.
-    virtual uint32_t line() = 0;
-
-    // @brief Returns whether the breakpoint is removed when it's hit or not.
-    virtual bool temporary() = 0;
+    // @brief Returns the type of the field.
+    virtual const ISymbolType* type() const = 0;
   };
 
-  // @brief Interface to the experimental console debugger.
-  // API is not stable yet.
-  class IConsoleDebugger
-  {
+  // Represents the type of a variable.
+  class ISymbolType {
   public:
+    // @brief Returns the version of the type interface. (SOURCEPAWN_DEBUG_TYPE_VERSION)
+    virtual int ApiVersion() const = 0;
 
-    // @brief Return the API version.
-    virtual int ApiVersion() = 0;
+    // @brief Returns whether the type represents an integer.
+    virtual bool isInt32() const = 0;
 
-    // @brief Returns whether debugging is enabled in general.
-    virtual bool IsEnabled() = 0;
+    // @brief Returns whether the type represents a float.
+    virtual bool isFloat32() const = 0;
 
-    /** 
-     * @brief Enables debugging in general. Prepares generated code for debugging.
-     * Must be set before any plugin is loaded.
-     *
-     * @param enable  Allow debugging?
-     * @return        True if debugging is allowed now, false if there are loaded plugins already.
-     */
-    virtual bool SetEnabled(bool enable) = 0;
+    // @brief Returns whether the type represents a boolean.
+    virtual bool isBoolean() const = 0;
 
-    /**
-     * @brief Directly start a debugging session on the next loaded plugin.
-     * This will break into the plugin when the first instruction is executed.
-     *
-     * @return True if next plugin will be debugged, false if debugging is disabled.
-     */
-    virtual bool DebugNextLoadedPlugin() = 0;
+    // @brief Returns whether the type represents a string.
+    virtual bool isString() const = 0;
 
-    /**
-     * @brief Activates the debugger on a plugin. Plugin will pause on the next instruction.
-     * @param ctx  Context of the plugin to debug.
-     * @return     True if debugging started, false otherwise.
-     */
-    virtual bool StartDebugger(const IPluginContext *ctx) = 0;
+    // @brief Returns whether the type represents the special "any" type.
+    virtual bool isAny() const = 0;
 
-    /**
-     * @brief Returns a list of all active breakpoints in a plugin.
-     * @param ctx  Context of the plugin.
-     * @return     List of breakpoints.
-     */
-    virtual std::vector<IBreakpoint *> *GetBreakpoints(const IPluginContext *ctx) = 0;
+    // @brief Returns whether the type represents an enum.
+    virtual bool isEnum() const = 0;
 
-    /**
-     * @brief Adds a breakpoint at a line or function in a plugin.
-     * Can be of format "<file>:<line>" or "<file>:<function>".
-     *
-     * @param ctx  Context of the plugin.
-     * @param line String describing the address to break on.
-     * @return     The new breakpoint or nullptr on error.
-     */
-    virtual IBreakpoint *AddBreakpoint(const IPluginContext *ctx, const char *line, bool temporary) = 0;
+    // @brief Returns whether the type represents a function.
+    virtual bool isFunction() const = 0;
 
-    /**
-     * @brief Removes a breakpoint from a plugin.
-     * @param ctx   Context of the plugin.
-     * @param bpnum Breakpoint number to remove.
-     * @return      True if breakpoint found and removed, false otherwise.
-     */
-    virtual bool ClearBreakpoint(const IPluginContext *ctx, int bpnum) = 0;
+    // @brief Returns whether the type represents nothing.
+    virtual bool isVoid() const = 0;
+
+    // @brief Returns whether the type represents a struct.
+    virtual bool isStruct() const = 0;
+
+    // @brief Returns whether the type represents a class object.
+    virtual bool isObject() const = 0;
+
+    // @brief Returns whether the type represents an enum struct.
+    virtual bool isEnumStruct() const = 0;
+
+    // @brief Returns whether the argument is passed by reference.
+    // Only valid for argument types in a function signature.
+    virtual bool isReference() const = 0;
+
+    // @brief Returns whether the type is const.
+    virtual bool isConstant() const = 0;
+
+    // @brief Returns whether the symbol is an array.
+    virtual bool isArray() const = 0;
+
+    // @brief Returns the number of dimensions of the array.
+    virtual uint32_t dimcount() const = 0;
+
+    // @brief Returns the size of a dimension.
+    virtual uint32_t dimension(uint32_t dim) const = 0;
+
+    // @brief Returns the number of fields in the enum struct.
+    virtual uint32_t esfieldcount() const = 0;
+
+    // @brief Returns the selected enum struct field.
+    virtual const IEnumStructField* esfield(uint32_t idx) const = 0;
+
+    // @brief Returns the name of the type.
+    // Only valid for non-primitive types.
+    virtual const char* name() const = 0;
   };
 
-  // @brief A function named "GetConsoleDebugger" is exported from the
-  // SourcePawn DLL, conforming to the following signature:
-  typedef IConsoleDebugger *(*GetConsoleDebuggerFn)(int apiVersion);
+  // Visibility scope of a symbol.
+  enum SymbolScope {
+    Global,
+    Local,
+    Static,
+    Argument
+  };
+
+  // Represents a debug symbol in a plugin
+  // which can be a variable or a function.
+  class IDebugSymbol {
+  public:
+    // @brief Returns the version of the symbol interface. (SOURCEPAWN_DEBUG_SYMBOL_VERSION)
+    virtual int ApiVersion() const = 0;
+
+    // @brief Returns the name of the symbol.
+    virtual const char* name() const = 0;
+
+    // @brief Returns the visibility scope of the symbol.
+    virtual SymbolScope scope() const = 0;
+
+    // @brief Returns the address of the data of the symbol.
+    // For function symbols, this is the same as codestart().
+    virtual cell_t address() const = 0;
+
+    // @brief Returns the code address of where the symbol's scope starts.
+    // For function symbols, this is the address of the first instruction.
+    virtual cell_t codestart() const = 0;
+
+    // @brief Returns the code address of where the symbol's scope ends.
+    // For function symbols, this is the address of the last instruction.
+    virtual cell_t codeend() const = 0;
+
+    // @brief Returns the type of the symbol.
+    virtual const ISymbolType* type() const = 0;
+  };
+
+  // Allows to iterate through all available IDebugSymbols.
+  class IDebugSymbolIterator
+  {
+  public:
+    virtual ~IDebugSymbolIterator() {}
+
+    // @brief Returns whether the end of the iteration was reached.
+    virtual bool Done() = 0;
+
+    // @brief Returns the next debug symbol in the iteration.
+    virtual const IDebugSymbol* Next() = 0;
+
+    // @brief Resets the iterator back to the beginning.
+    virtual void Reset() = 0;
+  };
 }
+
 #endif //_INCLUDE_SOURCEPAWN_VM_DEBUG_API_H_

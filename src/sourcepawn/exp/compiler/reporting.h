@@ -18,12 +18,13 @@
 #ifndef _include_spcomp_reporting_h_
 #define _include_spcomp_reporting_h_
 
-#include "shared/string-pool.h"
-#include "source-location.h"
+#include <memory>
+
 #include <amtl/am-refcounting.h>
 #include <amtl/am-vector.h>
 #include <amtl/am-string.h>
-#include <amtl/am-autoptr.h>
+#include "shared/string-pool.h"
+#include "source-location.h"
 
 namespace sp {
 
@@ -66,7 +67,7 @@ class TMessage : public ke::Refcounted<TMessage>
   {
    public:
     virtual ~Arg() {}
-    virtual AString Render() = 0;
+    virtual std::string Render() = 0;
   };
 
   class StringArg : public Arg
@@ -75,19 +76,19 @@ class TMessage : public ke::Refcounted<TMessage>
     explicit StringArg(const char* str)
      : str_(str)
     {}
-    explicit StringArg(const AString& str)
+    explicit StringArg(const std::string& str)
      : str_(str)
     {}
-    explicit StringArg(AString&& str)
+    explicit StringArg(std::string&& str)
      : str_(str)
     {}
 
-    AString Render() override {
+    std::string Render() override {
       return str_;
     }
 
    private:
-    AString str_;
+    std::string str_;
   };
 
   class AtomArg : public Arg
@@ -97,14 +98,14 @@ class TMessage : public ke::Refcounted<TMessage>
      : atom_(atom)
     {}
 
-    AString Render() override;
+    std::string Render() override;
 
    private:
     Atom* atom_;
   };
 
   void addArg(Arg* arg) {
-    args_.append(arg);
+    args_.push_back(std::unique_ptr<Arg>(arg));
   }
   void addArg(Atom* atom) {
     addArg(new AtomArg(atom));
@@ -112,10 +113,10 @@ class TMessage : public ke::Refcounted<TMessage>
   void addArg(const char* str) {
     addArg(new StringArg(str));
   }
-  void addArg(const AString& str) {
+  void addArg(const std::string& str) {
     addArg(new StringArg(str));
   }
-  void addArg(AString&& str) {
+  void addArg(std::string&& str) {
     addArg(new StringArg(str));
   }
   void addArg(size_t value);
@@ -123,8 +124,8 @@ class TMessage : public ke::Refcounted<TMessage>
 
   void addNote(RefPtr<TMessage> note) {
     if (note) {
-      assert(!note->notes_.length());
-      notes_.append(note);
+      assert(!note->notes_.size());
+      notes_.push_back(note);
     }
   }
 
@@ -135,20 +136,20 @@ class TMessage : public ke::Refcounted<TMessage>
     return message_id_;
   }
   size_t num_notes() const {
-    return notes_.length();
+    return notes_.size();
   }
   RefPtr<TMessage> note(size_t i) const {
     return notes_[i];
   }
-  const Vector<AutoPtr<Arg>>& args() const {
+  const std::vector<std::unique_ptr<Arg>>& args() const {
     return args_;
   }
 
  private:
   SourceLocation origin_;
   rmsg::Id message_id_;
-  Vector<AutoPtr<Arg>> args_;
-  Vector<RefPtr<TMessage>> notes_;
+  std::vector<std::unique_ptr<Arg>> args_;
+  std::vector<RefPtr<TMessage>> notes_;
 };
 
 class MessageBuilder 
@@ -203,7 +204,7 @@ class ReportManager
     return fatal_error_ != rmsg::none;
   }
   bool HasMessages() const {
-    return HasFatalError() || messages_.length() > 0;
+    return HasFatalError() || messages_.size() > 0;
   }
 
   void PrintMessages();
@@ -233,10 +234,10 @@ class ReportManager
   void printMessage(RefPtr<TMessage> message);
   void printSourceLine(const FullSourceRef& ref);
 
-  AString renderSourceRef(const FullSourceRef& ref);
-  AString renderMessage(rmsg::Id id,
-                        const AutoPtr<TMessage::Arg>* args,
-                        size_t len);
+  std::string renderSourceRef(const FullSourceRef& ref);
+  std::string renderMessage(rmsg::Id id,
+                            const std::unique_ptr<TMessage::Arg>* args,
+                            size_t len);
 
  private:
   SourceManager* source_;
@@ -244,7 +245,7 @@ class ReportManager
   SourceLocation fatal_loc_;
 
   unsigned num_errors_;
-  Vector<RefPtr<TMessage>> messages_;
+  std::vector<RefPtr<TMessage>> messages_;
 };
 
 struct ReportingContext

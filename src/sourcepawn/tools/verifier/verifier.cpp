@@ -10,12 +10,14 @@
 // You should have received a copy of the GNU General Public License along with
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
 //
-#include "environment.h"
-#include "method-verifier.h"
+#include "vm/environment.h"
+#include "vm/method-verifier.h"
+#include <amtl/experimental/am-argparser.h>
 #include <set>
 #include <deque>
 
 using namespace ke;
+using namespace ke::args;
 using namespace sp;
 using namespace SourcePawn;
 
@@ -25,51 +27,12 @@ bool sVerbose = false;
 static bool
 Verify(IPluginRuntime* rt)
 {
-  std::set<cell_t> seen;
-  std::deque<cell_t> work;
-  for (size_t i = 0; i < rt->GetPublicsNum(); i++) {
-    int err;
-    sp_public_t* fun;
-    if ((err = rt->GetPublicByIndex(i, &fun)) != SP_ERROR_NONE) {
-      fprintf(stderr, "Could not get public function at index %" KE_FMT_SIZET "\n", i);
+  ExceptionHandler eh(sEnv->APIv2());
+  if (!rt->PerformFullValidation()) {
+      const char* message = eh.HasException() ? eh.Message() : "unknown error";
+      fprintf(stderr, "Binary validation failed: %s\n", message);
       return false;
-    }
-    assert(seen.find(fun->code_offs) == seen.end());
-    seen.insert(fun->code_offs);
-    work.push_back(fun->code_offs);
   }
-
-  auto onExternFuncRef = [&seen, &work](cell_t offset) -> void {
-    if (seen.find(offset) != seen.end())
-      return;
-    if (sVerbose)
-      fprintf(stdout, "  Enqueued function reference @ %d\n", offset);
-    seen.insert(offset);
-    work.push_back(offset);
-  };
-
-  while (!work.empty()) {
-    cell_t offset = work.front();
-    work.pop_front();
-
-    if (sVerbose) {
-      const char* name;
-      int err = rt->GetDebugInfo()->LookupFunction(offset, &name);
-      if (err != SP_ERROR_NONE)
-        name = "<unknown>";
-
-      fprintf(stdout, "Verifying %s @ %d...\n", name, offset);
-    }
-
-    MethodVerifier verifier(PluginRuntime::FromAPI(rt), offset);
-    verifier.collectExternalFuncRefs(onExternFuncRef);
-
-    if (!verifier.verify()) {
-      fprintf(stdout, "Failed verification: %d\n", verifier.error());
-      return false;
-    }
-  }
-
   return true;
 }
 
@@ -77,7 +40,7 @@ static bool
 Analyze(const char* file)
 {
   char error[255];
-  AutoPtr<IPluginRuntime> rt(sEnv->APIv2()->LoadBinaryFromFile(file, error, sizeof(error)));
+  std::unique_ptr<IPluginRuntime> rt(sEnv->APIv2()->LoadBinaryFromFile(file, error, sizeof(error)));
   if (!rt) {
     fprintf(stdout, "Could not load .smx file: %s\n", error);
     return false;
@@ -101,24 +64,41 @@ Analyze(const char* file)
     }
   }
 
-  return Verify(rt);
+  return Verify(rt.get());
 }
 
 int main(int argc, char **argv)
 {
-  if (argc != 2) {
-    fprintf(stderr, "Usage: <file>\n");
+  Parser parser("SourcePawn plugin verifier.");
+
+  ToggleOption verbose(parser,
+    "v", "verbose",
+    Some(false),
+    "Verbose output.");
+  ToggleOption validate_debug_sections(parser,
+    "d", "validate_debug_sections",
+    Some(false),
+    "Validate debug sections as well.");
+  StringOption filename(parser,
+    "file",
+    "SMX file to verify.");
+
+  if (!parser.parse(argc, argv)) {
+    parser.usage(stderr, argc, argv);
     return 1;
   }
 
-  sVerbose = (getenv("VERBOSE") && getenv("VERBOSE")[0] == '1');
+  sVerbose = (getenv("VERBOSE") && getenv("VERBOSE")[0] == '1') || verbose.value();
 
   if ((sEnv = Environment::New()) == nullptr) {
     fprintf(stderr, "Could not initialize ISourcePawnEngine2\n");
     return 1;
   }
 
-  bool ok = Analyze(argv[1]);
+  if ((getenv("VALIDATE_DEBUG_SECTIONS") && getenv("VALIDATE_DEBUG_SECTIONS")[0] == '1') || validate_debug_sections.value())
+    sEnv->EnableDebugBreak();
+
+  bool ok = Analyze(filename.value().c_str());
 
   sEnv->Shutdown();
   delete sEnv;

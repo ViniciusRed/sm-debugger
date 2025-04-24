@@ -94,6 +94,9 @@ SpewOpcode(FILE* fp, PluginRuntime* runtime, const cell_t* start, const cell_t* 
     case OP_LOAD_S_ALT:
     case OP_STOR_S_PRI:
     case OP_STOR_S_ALT:
+    case OP_ADDR_PRI:
+    case OP_ADDR_ALT:
+    case OP_MOVS:
       fprintf(fp, "%d", cip[1]);
       break;
 
@@ -150,6 +153,11 @@ SpewOpcode(FILE* fp, PluginRuntime* runtime, const cell_t* start, const cell_t* 
     case OP_PUSH5_S:
     case OP_PUSH5_ADR:
       fprintf(fp, "%d, %d, %d, %d, %d", cip[1], cip[2], cip[3], cip[4], cip[5]);
+      break;
+
+    case OP_INITARRAY_PRI:
+    case OP_INITARRAY_ALT:
+      fprintf(fp, "%d %d %d %d %d", cip[1], cip[2], cip[3], cip[4], cip[5]);
       break;
 
     default:

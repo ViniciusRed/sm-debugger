@@ -15,15 +15,18 @@
 // 
 // You should have received a copy of the GNU General Public License along with
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
+#include <amtl/am-platform.h>
+#if defined(KE_POSIX)
+# include <sys/ioctl.h>
+# include <unistd.h>
+#endif
+
+#include <algorithm>
+
 #include "reporting.h"
 #include "compile-context.h"
 #include "source-manager.h"
 #include "auto-string.h"
-#include <amtl/am-platform.h>
-#if defined(KE_POSIX)
-# include <unistd.h>
-# include <sys/ioctl.h>
-#endif
 
 using namespace ke;
 using namespace sp;
@@ -125,7 +128,7 @@ ReportManager::report(const RefPtr<TMessage>& msg)
       reportFatal(msg->origin(), rmsg::too_many_errors);
   }
 
-  messages_.append(msg);
+  messages_.push_back(msg);
 }
 
 MessageBuilder
@@ -155,9 +158,9 @@ ReportManager::PrintMessages()
     return;
   }
 
-  for (size_t i = 0; i < messages_.length(); i++) {
+  for (size_t i = 0; i < messages_.size(); i++) {
     printMessage(messages_[i]);
-    if (i != messages_.length() - 1)
+    if (i != messages_.size() - 1)
       fprintf(stderr, "\n");
   }
 
@@ -192,7 +195,7 @@ GetTerminalWidth()
 #endif
 }
 
-static AString
+static std::string
 ExpandTabsInLine(const char* line, size_t length)
 {
   AutoString builder;
@@ -200,7 +203,7 @@ ExpandTabsInLine(const char* line, size_t length)
   size_t last_tab = 0;
   for (size_t i = 0; i < length; i++) {
     if (line[i] == '\t') {
-      builder = builder + AString(&line[last_tab], i - last_tab);
+      builder = builder + std::string(&line[last_tab], i - last_tab);
       builder = builder + "        ";
 
       last_tab = i + 1;
@@ -209,8 +212,8 @@ ExpandTabsInLine(const char* line, size_t length)
   }
 
   if (last_tab < length)
-    builder = builder + AString(&line[last_tab], length - last_tab);
-  return AString(builder.ptr());
+    builder = builder + std::string(&line[last_tab], length - last_tab);
+  return std::string(builder.ptr());
 }
 
 void
@@ -223,7 +226,7 @@ ReportManager::printSourceLine(const FullSourceRef& ref)
   const unsigned min_cols = suffix_len + prefix_len + 12;
 
   // Fudge factor, we assume we can print at least 16 columns.
-  const unsigned max_cols = ke::Max(GetTerminalWidth(), min_cols);
+  const unsigned max_cols = std::max(GetTerminalWidth(), min_cols);
 
   const unsigned line_index = ref.line - 1;
   LineExtents* lines = ref.file->lineCache();
@@ -243,20 +246,20 @@ ReportManager::printSourceLine(const FullSourceRef& ref)
     line_length--;
   }
 
-  AString expanded = ExpandTabsInLine(lineptr, line_length);
+  std::string expanded = ExpandTabsInLine(lineptr, line_length);
 
-  const char* line_print = expanded.chars();
+  const char* line_print = expanded.c_str();
 
   // Recompute the column number if we expanded tabs.
   unsigned col = ref.col;
-  if (expanded.length() != line_length) {
+  if (expanded.size() != line_length) {
     for (unsigned i = 0; i < ref.col; i++) {
       if (lineptr[i] == '\t')
         col += 7;
     }
   }
 
-  line_length = expanded.length();
+  line_length = expanded.size();
 
   const char* prefix = "";
   const char* suffix = "";
@@ -269,7 +272,7 @@ ReportManager::printSourceLine(const FullSourceRef& ref)
       static const unsigned delta = col - midpoint;
 
       line_print += delta;
-      line_length = Min(max_chars, line_length - delta);
+      line_length = std::min(max_chars, line_length - delta);
       col = prefix_len + midpoint;
 
       prefix = long_prefix;
@@ -281,8 +284,8 @@ ReportManager::printSourceLine(const FullSourceRef& ref)
   }
 
   {
-    AString line(line_print, line_length);
-    fprintf(stderr, "%s%s%s\n", prefix, line.chars(), suffix);
+    std::string line(line_print, line_length);
+    fprintf(stderr, "%s%s%s\n", prefix, line.c_str(), suffix);
   }
 
   for (size_t i = 1; i < col; i++)
@@ -290,8 +293,8 @@ ReportManager::printSourceLine(const FullSourceRef& ref)
   fprintf(stderr, "^\n");
 }
 
-AString
-ReportManager::renderMessage(rmsg::Id id, const AutoPtr<TMessage::Arg>* args, size_t argc)
+std::string
+ReportManager::renderMessage(rmsg::Id id, const std::unique_ptr<TMessage::Arg>* args, size_t argc)
 {
   const rmsg_info& info = GetMessageInfo(id);
 
@@ -308,7 +311,7 @@ ReportManager::renderMessage(rmsg::Id id, const AutoPtr<TMessage::Arg>* args, si
         continue;
       }
 
-      builder = builder + AString(info.text + last_insertion, i - last_insertion);
+      builder = builder + std::string(info.text + last_insertion, i - last_insertion);
       builder = builder + args[argno]->Render();
 
       last_insertion = i + 2;
@@ -316,19 +319,19 @@ ReportManager::renderMessage(rmsg::Id id, const AutoPtr<TMessage::Arg>* args, si
   }
 
   if (last_insertion < text_length)
-    builder = builder + AString(info.text + last_insertion, text_length - last_insertion);
-  return AString(builder.ptr());
+    builder = builder + std::string(info.text + last_insertion, text_length - last_insertion);
+  return std::string(builder.ptr());
 }
 
-AString
+std::string
 ReportManager::renderSourceRef(const FullSourceRef& ref)
 {
   if (!ref.file)
-    return AString(":0");
+    return std::string(":0");
 
   AutoString builder = ref.file->path();
   builder = builder + ":" + AutoString(ref.line) + ":" + AutoString(ref.col);
-  return AString(builder.ptr());
+  return std::string(builder.ptr());
 }
 
 void
@@ -344,21 +347,21 @@ ReportManager::printMessage(RefPtr<TMessage> message)
     line = renderSourceRef(history.files[0]);
   line = line + ": ";
   line = line + renderMessage(message->id(),
-                              message->args().buffer(),
-                              message->args().length());
+                              message->args().data(),
+                              message->args().size());
 
   fprintf(stderr, "%s\n", line.ptr());
 
   if (!history.files.empty())
     printSourceLine(history.files[0]);
 
-  for (size_t i = 0; i < history.macros.length(); i++) {
+  for (size_t i = 0; i < history.macros.size(); i++) {
     FullSourceRef ref = source_->getOrigin(history.macros[i]);
     AutoString note = renderSourceRef(ref);
     note = note + ": ";
 
     Atom* name = history.macros[i].macro->name;
-    AutoPtr<TMessage::Arg> arg(new TMessage::AtomArg(name));
+    std::unique_ptr<TMessage::Arg> arg(new TMessage::AtomArg(name));
 
     note = note + renderMessage(rmsg::from_macro, &arg, 1);
 
@@ -366,7 +369,7 @@ ReportManager::printMessage(RefPtr<TMessage> message)
     printSourceLine(ref);
   }
 
-  for (size_t i = 1; i < history.files.length(); i++) {
+  for (size_t i = 1; i < history.files.size(); i++) {
     AutoString note = renderSourceRef(history.files[i]);
     note = note + ": ";
     note = note + renderMessage(rmsg::included_from, nullptr, 0);
@@ -378,8 +381,8 @@ ReportManager::printMessage(RefPtr<TMessage> message)
     printMessage(message->note(i));
 }
 
-AString
+std::string
 TMessage::AtomArg::Render()
 {
-  return AString(atom_->chars());
+  return std::string(atom_->chars());
 }

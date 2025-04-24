@@ -15,8 +15,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <am-refcounting.h>
-#include <am-vector.h>
+#include <amtl/am-refcounting.h>
+#include <amtl/am-vector.h>
 
 namespace sp {
 
@@ -96,7 +96,7 @@ class CodeAllocator
   void operator =(const CodeAllocator&) = delete;
 
  private:
-  Vector<RefPtr<CodePool>> cached_pools_;
+  std::vector<RefPtr<CodePool>> cached_pools_;
 };
 
 } // namespace sp

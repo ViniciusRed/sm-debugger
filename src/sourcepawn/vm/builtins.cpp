@@ -11,7 +11,7 @@
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
 //
 #include "builtins.h"
-#include <am-float.h>
+#include <amtl/am-float.h>
 #include <math.h>
 
 namespace sp {
@@ -90,6 +90,14 @@ FloatDiv(IPluginContext* pCtx, const cell_t* params)
 }
 
 static cell_t
+FloatMod(IPluginContext* pCtx, const cell_t* params)
+{
+  float val = fmodf(sp_ctof(params[1]), sp_ctof(params[2]));
+
+  return sp_ftoc(val);
+}
+
+static cell_t
 FloatGt(IPluginContext* pCtx, const cell_t* params)
 {
   return !!(sp_ctof(params[1]) > sp_ctof(params[2]));
@@ -138,6 +146,7 @@ sp_nativeinfo_t gBuiltinFloatNatives[] = {
   {"__float_ctor",    FloatCtor},
   {"__float_mul",     FloatMul},
   {"__float_div",     FloatDiv},
+  {"__float_mod",     FloatMod},
   {"__float_add",     FloatAdd},
   {"__float_sub",     FloatSub},
   {"__float_gt",      FloatGt},

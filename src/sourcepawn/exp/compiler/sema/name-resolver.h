@@ -18,6 +18,8 @@
 #ifndef _include_spcomp_name_resolver_h_
 #define _include_spcomp_name_resolver_h_
 
+#include <utility>
+
 #include "scopes.h"
 #include "type-resolver.h"
 
@@ -73,8 +75,8 @@ class NameResolver
                                    TypeSpecifier& spec,
                                    ExpressionList* args);
   TypesetDecl* EnterTypeset(const SourceLocation& loc, const NameToken& name);
-  void EnterTypeIntoTypeset(TypesetDecl* decl, Vector<TypesetDecl::Entry>& types, TypeSpecifier& spec);
-  void FinishTypeset(TypesetDecl* decl, const Vector<TypesetDecl::Entry>& types);
+  void EnterTypeIntoTypeset(TypesetDecl* decl, std::vector<TypesetDecl::Entry>& types, TypeSpecifier& spec);
+  void FinishTypeset(TypesetDecl* decl, const std::vector<TypesetDecl::Entry>& types);
 
   void HandleFunctionSignature(
     TokenKind kind,
@@ -142,7 +144,7 @@ class NameResolver
     SymbolEnv(SymbolEnv&& other)
      : scope_(other.scope_),
        kind_(other.kind_),
-       children_(Move(other.children_))
+       children_(std::move(other.children_))
     {
     }
 
@@ -152,7 +154,7 @@ class NameResolver
     Scope::Kind kind() const {
       return kind_;
     }
-    Vector<Scope*>& children() {
+    std::vector<Scope*>& children() {
       return children_;
     }
 
@@ -168,8 +170,15 @@ class NameResolver
         child->setParent(scope_);
       } else {
         // Wait until we leave the environment to decide what to do.
-        children_.append(child);
+        children_.push_back(child);
       }
+    }
+
+    SymbolEnv& operator =(SymbolEnv&& other) {
+      scope_ = other.scope_;
+      kind_ = other.kind_;
+      children_ = std::move(other.children_);
+      return *this;
     }
 
    private:
@@ -179,7 +188,7 @@ class NameResolver
    private:
     Scope* scope_;
     Scope::Kind kind_;
-    Vector<Scope*> children_;
+    std::vector<Scope*> children_;
   };
 
  private:
@@ -187,10 +196,10 @@ class NameResolver
   PoolAllocator& pool_;
   TypeResolver tr_;
   GlobalScope* globals_;
-  Vector<SymbolEnv> env_;
+  std::vector<SymbolEnv> env_;
 
   LayoutScope* layout_scope_;
-  Vector<LayoutScope*> saved_layout_scopes_;
+  std::vector<LayoutScope*> saved_layout_scopes_;
 
   bool encountered_return_value_;
 
@@ -201,7 +210,7 @@ class NameResolver
   Atom* atom_bool_;
 
   AtomMap<NameProxy*> user_tags_;
-  Vector<NameProxy*> unresolved_names_;
+  std::vector<NameProxy*> unresolved_names_;
 };
 
 }

@@ -12,16 +12,18 @@ new crab5[] = {1, 2, 3};
 bool crab7[] = {false, true, true}
 char crab8[] = "hello"
 
-native float operator*(float oper1, float oper2) = FloatMul;
+
 
 forward void OnPluginStart();
 
 public int Crab()
 {
+  return 0;
 }
 
 public float Crab2()
 {
+  return 0.0;
 }
 
 public Crab3()

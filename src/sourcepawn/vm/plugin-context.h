@@ -25,7 +25,7 @@ static const cell_t STACK_MARGIN = 64; // 16 parameters of safety, I guess
 class Environment;
 class PluginContext;
 
-class PluginContext : public BasePluginContext
+class PluginContext final : public BasePluginContext
 {
  public:
   PluginContext(PluginRuntime* pRuntime);
@@ -57,7 +57,14 @@ class PluginContext : public BasePluginContext
   int LocalToStringNULL(cell_t local_addr, char** addr) override;
   IPluginRuntime* GetRuntime() override;
   cell_t* GetLocalParams() override;
-
+  bool HeapAlloc2dArray(unsigned int length, unsigned int stride, cell_t* local_addr,
+                        const cell_t* init) override;
+  void EnterHeapScope() override;
+  void LeaveHeapScope() override;
+  cell_t GetNullFunctionValue();
+  bool IsNullFunctionId(funcid_t func);
+  bool GetFunctionByIdOrNull(funcid_t func, IPluginFunction** out);
+  IPluginFunction* GetFunctionByIdOrError(funcid_t func_id);
   bool Invoke(funcid_t fnid, const cell_t* params, unsigned int num_params, cell_t* result);
 
   size_t HeapSize() const {
@@ -76,19 +83,16 @@ class PluginContext : public BasePluginContext
  public:
   bool IsInExec() override;
 
-    static inline size_t offsetOfSp() {
-    PluginContext* dummy = nullptr;
-    return reinterpret_cast<uintptr_t>(&dummy->sp_);
-  }
-  
+  static inline size_t offsetOfSp() {
+    return reinterpret_cast<size_t>(&(reinterpret_cast<PluginContext*>(0)->sp_));
+  }  
   static inline size_t offsetOfRuntime() {
     PluginContext* dummy = nullptr;
-    return reinterpret_cast<uintptr_t>(&dummy->m_pRuntime);
+    return reinterpret_cast<size_t>(&dummy->m_pRuntime) - reinterpret_cast<size_t>(dummy);
   }
-  
   static inline size_t offsetOfMemory() {
     PluginContext* dummy = nullptr;
-    return reinterpret_cast<uintptr_t>(&dummy->memory_);
+    return reinterpret_cast<size_t>(&dummy->memory_) - reinterpret_cast<size_t>(dummy);
   }
 
   int32_t* addressOfSp() {
@@ -99,6 +103,9 @@ class PluginContext : public BasePluginContext
   }
   cell_t* addressOfHp() {
     return &hp_;
+  }
+  cell_t* addressOfHpScope() {
+    return &hp_scope_;
   }
 
   cell_t frm() const {
@@ -113,6 +120,12 @@ class PluginContext : public BasePluginContext
 
   int popTrackerAndSetHeap();
   int pushTracker(uint32_t amount);
+
+  // Note: this is allowed even in legacy plugins, since the underlying
+  // mechanism doesn't actually require opcode support. The heap code
+  // support bit only indicates that we should *not* use the tracker.
+  bool enterHeapScope();
+  bool leaveHeapScope();
 
   int generateArray(cell_t dims, cell_t* stk, bool autozero);
   int generateFullArray(uint32_t argc, cell_t* argv, int autozero);
@@ -131,10 +144,12 @@ class PluginContext : public BasePluginContext
   bool setCellValue(cell_t address, cell_t value);
   bool heapAlloc(cell_t amount, cell_t* out);
   cell_t* acquireAddrRange(cell_t address, uint32_t bounds);
-  int rebaseArray(cell_t array_addr,
-                  cell_t dat_addr,
-                  cell_t iv_size,
-                  cell_t data_size);
+  bool initArray(cell_t array_addr,
+                 cell_t dat_addr,
+                 cell_t iv_size,
+                 cell_t data_copy_size,
+                 cell_t data_fill_size,
+                 cell_t fill_value);
 
   cell_t* throwIfBadAddress(cell_t addr);
 
@@ -154,8 +169,8 @@ class PluginContext : public BasePluginContext
   cell_t sp_;
   cell_t hp_;
   cell_t frm_;
+  cell_t hp_scope_;
 };
 
 } // namespace sp
-
 #endif //_INCLUDE_SOURCEPAWN_V1CONTEXT_H_

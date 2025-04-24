@@ -1,29 +1,25 @@
 // vim: set ts=8 sts=4 sw=4 tw=99 et:
-/*  Pawn compiler - Error message system
- *  In fact a very simple system, using only 'panic mode'.
- *
- *  Copyright (c) ITB CompuPhase, 1997-2006
- *
- *  This software is provided "as-is", without any express or implied warranty.
- *  In no event will the authors be held liable for any damages arising from
- *  the use of this software.
- *
- *  Permission is granted to anyone to use this software for any purpose,
- *  including commercial applications, and to alter it and redistribute it
- *  freely, subject to the following restrictions:
- *
- *  1.  The origin of this software must not be misrepresented; you must not
- *      claim that you wrote the original software. If you use this software in
- *      a product, an acknowledgment in the product documentation would be
- *      appreciated but is not required.
- *  2.  Altered source versions must be plainly marked as such, and must not be
- *      misrepresented as being the original software.
- *  3.  This notice may not be removed or altered from any source distribution.
- *
- *  Version: $Id$
- */
+//
+//  Copyright (c) ITB CompuPhase, 1997-2006
+//  Copyright (c) 2023 AlliedModders LLC
+//
+//  This software is provided "as-is", without any express or implied warranty.
+//  In no event will the authors be held liable for any damages arising from
+//  the use of this software.
+//
+//  Permission is granted to anyone to use this software for any purpose,
+//  including commercial applications, and to alter it and redistribute it
+//  freely, subject to the following restrictions:
+//
+//  1.  The origin of this software must not be misrepresented; you must not
+//      claim that you wrote the original software. If you use this software in
+//      a product, an acknowledgment in the product documentation would be
+//      appreciated but is not required.
+//  2.  Altered source versions must be plainly marked as such, and must not be
+//      misrepresented as being the original software.
+//  3.  This notice may not be removed or altered from any source distribution.
 #include <assert.h>
-#if defined __WIN32__ || defined _WIN32 || defined __MSDOS__
+#ifdef _WIN32
 #    include <io.h>
 #endif
 #if defined __linux__ || defined __GNUC__
@@ -33,15 +29,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined FORTIFY
-#    include <alloc/fortify.h>
-#endif
+
+#include <sstream>
+#include <utility>
+#include <vector>
+
+#include "compile-context.h"
+#include "compile-options.h"
 #include "errors.h"
 #include "lexer.h"
-#include "libpawnc.h"
+#include "parse-node.h"
 #include "sc.h"
-#include "sclist.h"
-#include "scvars.h"
+#include "symbols.h"
+#include "types.h"
 
 #if defined _MSC_VER
 #    pragma warning(push)
@@ -54,247 +54,278 @@
 #    pragma warning(pop)
 #endif
 
-#define NUM_WARNINGS (int)(sizeof warnmsg / sizeof warnmsg[0])
-static unsigned char warndisable[(NUM_WARNINGS + 7) / 8]; /* 8 flags in a char */
-
-static int errflag;
-static AutoErrorPos* sPosOverride = nullptr;
+namespace sp {
+namespace cc {
 
 AutoErrorPos::AutoErrorPos(const token_pos_t& pos)
-  : pos_(pos),
-    prev_(sPosOverride)
+  : reports_(CompileContext::get().reports()),
+    pos_(pos)
 {
-    sPosOverride = this;
+    prev_ = reports_->pos_override();
+    reports_->set_pos_override(this);
 }
 
 AutoErrorPos::~AutoErrorPos()
 {
-    assert(sPosOverride == this);
-    sPosOverride = prev_;
+    assert(reports_->pos_override() == this);
+    reports_->set_pos_override(prev_);
 }
 
-/*  error
- *
- *  Outputs an error message (note: msg is passed optionally).
- *  If an error is found, the variable "errflag" is set and subsequent
- *  errors are ignored until lex() finds a semicolumn or a keyword
- *  (lex() resets "errflag" in that case).
- *
- *  Global references: inpfname   (reffered to only)
- *                     fline      (reffered to only)
- *                     fcurrent   (reffered to only)
- *                     errflag    (altered)
- */
-int
-error(int number, ...)
+static inline ErrorType
+DeduceErrorType(int number)
 {
-    if (sPosOverride) {
-        va_list ap;
-        va_start(ap, number);
-        error_va(sPosOverride->pos(), number, ap);
-        va_end(ap);
-        return 0;
-    }
+    auto& cc = CompileContext::get();
+    if (number < 200 || (number < 300 && cc.options()->warnings_are_errors) || number >= 400)
+        return ErrorType::Error;
 
-    va_list ap;
-    va_start(ap, number);
-    ErrorReport report = ErrorReport::infer_va(number, ap);
-    va_end(ap);
-
-    report_error(&report);
-    return 0;
+    if (cc.reports()->IsWarningDisabled(number))
+        return ErrorType::Suppressed;
+    return ErrorType::Warning;
 }
 
-int
-error(const token_pos_t& where, int number, ...)
+static inline const char*
+GetErrorTypePrefix(ErrorType type)
 {
-    va_list ap;
-    va_start(ap, number);
-    ErrorReport report = ErrorReport::create_va(number, where.file, where.line, ap);
-    va_end(ap);
-
-    report.lineno = where.line;
-    report_error(&report);
-    return 0;
-}
-
-int
-error_va(const token_pos_t& where, int number, va_list ap)
-{
-    ErrorReport report = ErrorReport::create_va(number, where.file, where.line, ap);
-
-    report.lineno = where.line;
-    report_error(&report);
-    return 0;
-}
-
-int
-error(symbol* sym, int number, ...)
-{
-    va_list ap;
-    va_start(ap, number);
-    ErrorReport report = ErrorReport::create_va(number, sym->fnumber, sym->lnumber, ap);
-    va_end(ap);
-
-    report_error(&report);
-    return 0;
-}
-
-static void
-abort_compiler()
-{
-    if (strlen(errfname) == 0) {
-        fprintf(stdout, "\nCompilation aborted.");
-    }
-    if (outf != NULL) {
-        pc_closeasm(outf, TRUE);
-        outf = NULL;
-    }
-    longjmp(errbuf, 2); /* fatal error, quit */
-}
-
-ErrorReport
-ErrorReport::create_va(int number, int fileno, int lineno, va_list ap)
-{
-    ErrorReport report;
-    report.number = number;
-    report.fileno = fileno;
-    report.lineno = lineno;
-    if (report.fileno >= 0)
-        report.filename = get_inputfile(report.fileno);
-    else
-        report.filename = inpfname;
-
-    if (number < FIRST_FATAL_ERROR || (number >= 200 && sc_warnings_are_errors))
-        report.type = ErrorType::Error;
-    else if (number < 200)
-        report.type = ErrorType::Fatal;
-    else
-        report.type = ErrorType::Warning;
-
-    /* also check for disabled warnings */
-    if (report.type == ErrorType::Warning) {
-        int index = (report.number - 200) / 8;
-        int mask = 1 << ((report.number - 200) % 8);
-        if ((warndisable[index] & mask) != 0)
-            report.type = ErrorType::Suppressed;
-    }
-
-    const char* prefix = "";
-    switch (report.type) {
+    switch (type) {
         case ErrorType::Error:
-            prefix = "error";
-            break;
-        case ErrorType::Fatal:
-            prefix = "fatal error";
-            break;
+            return "error";
         case ErrorType::Warning:
         case ErrorType::Suppressed:
-            prefix = "warning";
-            break;
+            return "warning";
+        default:
+            assert(false);
+            return "(unknown)";
+    }
+}
+
+
+static inline const char*
+GetMessageForNumber(int number)
+{
+    if (number < 200) {
+        assert(size_t(number - 1) < sizeof(errmsg) / sizeof(*errmsg));
+        return errmsg[number - 1];
+    }
+    if (number < 300) {
+        assert(size_t(number - 200) < sizeof(warnmsg) / sizeof(*warnmsg));
+        return warnmsg[number - 200];
     }
 
-    const char* format = nullptr;
-    if (report.number < FIRST_FATAL_ERROR)
-        format = errmsg[report.number - 1];
-    else if (report.number < 200)
-        format = fatalmsg[report.number - FIRST_FATAL_ERROR];
+    assert(number >= 400);
+    assert(size_t(number - 400) < sizeof(errmsg_ex) / sizeof(*errmsg_ex));
+    return errmsg_ex[number - 400];
+}
+
+MessageBuilder::MessageBuilder(int number)
+  : number_(number)
+{
+    auto& cc = CompileContext::get();
+    if (auto pos_override = cc.reports()->pos_override())
+        where_ = pos_override->pos();
     else
-        format = warnmsg[report.number - 200];
-
-    char msg[1024];
-    ke::SafeVsprintf(msg, sizeof(msg), format, ap);
-
-    char base[1024];
-    ke::SafeSprintf(base, sizeof(base), "%s(%d) : %s %03d: ", report.filename, report.lineno,
-                    prefix, report.number);
-
-    char full[2048];
-    ke::SafeSprintf(full, sizeof(full), "%s%s", base, msg);
-    report.message = full;
-
-    return report;
+        where_ = CompileContext::get().lexer()->pos();
 }
 
-ErrorReport
-ErrorReport::infer_va(int number, va_list ap)
+MessageBuilder::MessageBuilder(MessageBuilder&& other)
+  : where_(other.where_),
+    number_(other.number_),
+    args_(std::move(other.args_)),
+    disabled_(false)
 {
-    return create_va(number, -1, fline, ap);
+    other.disabled_ = true;
 }
 
-void
-report_error(ErrorReport* report)
+MessageBuilder::MessageBuilder(ParseNode* node, int number)
 {
-    static int lastline, errorcount;
-    static short lastfile;
+    where_ = node->pos();
+    number_ = number;
+}
+
+MessageBuilder&
+MessageBuilder::operator =(MessageBuilder&& other)
+{
+    where_ = other.where_;
+    number_ = other.number_;
+    args_ = std::move(other.args_);
+    disabled_ = false;
+    other.disabled_ = true;
+    return *this;
+}
+
+MessageBuilder::~MessageBuilder()
+{
+    if (disabled_)
+        return;
+
+    auto& cc = CompileContext::get();
+
+    ErrorReport report;
+    report.loc = where_;
+    report.number = number_;
+    if (where_.valid())
+        report.fileno = cc.sources()->GetSourceFileIndex(where_);
+    else
+        report.fileno = 0;
+
+    if (report.fileno < cc.sources()->opened_files().size())
+        report.file = cc.sources()->opened_files().at(report.fileno);
+    else if (!cc.sources()->opened_files().empty())
+        report.file = cc.sources()->opened_files().at(0);
+
+    uint32_t actual_line = cc.sources()->GetLineAndCol(where_, &report.col);
+
+    // Rely on tokline when it's there, but... we should ditch it here, we
+    // have the technology.
+    if (where_.valid() && !where_.line)
+        where_.line = actual_line;
+    report.lineno = std::max(where_.line, 1);
+
+    report.type = DeduceErrorType(number_);
+
+    std::ostringstream out;
+    if (report.file)
+        out << report.file->name() << "(" << report.lineno << ") : ";
+    out << GetErrorTypePrefix(report.type)
+        << " " << ke::StringPrintf("%03d", report.number) << ": ";
+
+    auto iter = args_.begin();
+    const char* msg = GetMessageForNumber(number_);
+    while (*msg) {
+        if (*msg == '%' && (*(msg + 1) == 's' || *(msg + 1) == 'd')) {
+            if (iter == args_.end())
+                out << "<invalid>";
+            else
+                out << *iter++;
+            msg += 2;
+        } else {
+            out << *msg++;
+        }
+    }
+
+    report.message = out.str();
+
+    cc.reports()->ReportError(std::move(report));
+}
+
+void ReportManager::ReportError(ErrorReport&& report) {
+    if (!defers_.empty()) {
+        defers_.back()->AddDeferred(std::move(report));
+        return;
+    }
 
     /* errflag is reset on each semicolon.
      * In a two-pass compiler, an error should not be reported twice. Therefore
      * the error reporting is enabled only in the second pass (and only when
-     * actually producing output). Fatal errors may never be ignored.
+     * actually producing output).
      */
-    if (report->type != ErrorType::Fatal) {
-        if (errflag)
-            return;
-        if (sc_status != statWRITE && !sc_err_status)
-            return;
-    }
+    // This is needed so Analyze() can return "true" but still propagate errors.
+    if (report.type == ErrorType::Error)
+        total_errors_++;
 
-    switch (report->type) {
+    if (errflag_ && cc_.one_error_per_stmt())
+        return;
+
+    break_on_error(report.number);
+
+    error_list_.emplace_back(std::move(report));
+
+    switch (error_list_.back().type) {
         case ErrorType::Suppressed:
             return;
         case ErrorType::Warning:
-            warnnum++;
             break;
         case ErrorType::Error:
-        case ErrorType::Fatal:
-            errnum++;
-            sc_total_errors++;
-            errflag = TRUE;
+            total_errors_++;
+            total_reported_errors_++;
+            if (cc_.one_error_per_stmt())
+                errflag_ = true;
             break;
     }
 
-    FILE* fp = nullptr;
-    if (strlen(errfname) > 0)
-        fp = fopen(errfname, "a");
-    if (!fp)
-        fp = stdout;
-
-    fprintf(fp, "%s", report->message.chars());
-    fflush(fp);
-
-    if (fp != stdout)
-        fclose(fp);
-
-    if (report->type == ErrorType::Fatal || errnum > 25) {
-        abort_compiler();
-        return;
-    }
+    if (total_reported_errors_ > 25)
+        cc_.set_must_abort();
 
     // Count messages per line, reset if not the same line.
-    if (lastline != report->lineno || report->fileno != lastfile)
-        errorcount = 0;
+    if (lastline_ != error_list_.back().lineno || error_list_.back().fileno != lastfile_)
+        errors_on_line_ = 0;
 
-    lastline = report->lineno;
-    lastfile = report->fileno;
+    lastline_ = error_list_.back().lineno;
+    lastfile_ = error_list_.back().fileno;
 
-    if (report->type != ErrorType::Warning)
-        errorcount++;
-    if (errorcount >= 3)
-        error(FATAL_ERROR_OVERWHELMED_BY_BAD);
+    if (error_list_.back().type != ErrorType::Warning)
+        errors_on_line_++;
+    if (errors_on_line_ >= 3)
+        cc_.set_must_abort();
 }
 
-void
-errorset(int code, int line)
-{
-    switch (code) {
-        case sRESET:
-            errflag = FALSE; /* start reporting errors */
-            break;
-        case sFORCESET:
-            errflag = TRUE; /* stop reporting errors */
-            break;
+void DumpDiagnostic(FILE* fp, const ErrorReport& report) {
+    auto line = report.file->GetLine(report.lineno);
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+        line.pop_back();
+
+    // Replace \t with eight spaces since terminals do weird stuff with tabs.
+    static constexpr char kPrintedTab[] = "        ";
+
+    std::string printed_line;
+    for (size_t i = 0; i < line.size(); i++) {
+        if (line[i] == '\t')
+            printed_line += kPrintedTab;
+        else
+            printed_line += line[i];
     }
+
+    fprintf(fp, "%6u | %s\n", report.lineno, printed_line.c_str());
+
+    // This should pass, but doesn't.
+    // Fails in tests/compile-only/fail-empty-preproc-expr.sp and :TODO: to
+    // investigate why.
+    // assert(report.col <= line.size());
+
+    uint32_t num_dashes = 9;
+    for (size_t i = 1; i <= std::min((size_t)report.col - 1, line.size()); i++) {
+        if (line[i - 1] == '\t')
+            num_dashes += 8;
+        else
+            num_dashes += 1;
+    }
+
+    for (uint32_t i = 0; i < num_dashes; i++)
+        fprintf(fp, "-");
+    fprintf(fp, "^\n");
+}
+
+void ReportManager::DumpErrorReport(bool clear) {
+    FILE* stdfp = cc_.options()->use_stderr ? stderr : stdout;
+
+    FILE* fp = nullptr;
+    if (!cc_.errfname().empty())
+        fp = fopen(cc_.errfname().c_str(), "a");
+    if (!fp)
+        fp = stdfp;
+
+    std::sort(error_list_.begin(), error_list_.end(),
+              [](const ErrorReport& a, const ErrorReport& b) -> bool {
+        if (a.fileno == b.fileno)
+            return a.lineno < b.lineno;
+        return a.fileno > b.fileno;
+    });
+
+    for (const auto& report : error_list_) {
+        if (report.type == ErrorType::Suppressed)
+            continue;
+        fprintf(fp, "%s", report.message.c_str());
+        if (report.loc.valid())
+            DumpDiagnostic(fp, report);
+        if (&report != &error_list_.back())
+            fprintf(fp, "\n");
+    }
+    fflush(fp);
+
+    if (fp != stdfp)
+        fclose(fp);
+
+    if (clear)
+        error_list_.clear();
 }
 
 /* sc_enablewarning()
@@ -307,33 +338,133 @@ errorset(int code, int line)
  *  o  1 for enable
  *  o  2 for toggle
  */
-int
-pc_enablewarning(int number, int enable)
-{
-    int index;
-    unsigned char mask;
-
-    if (number < 200)
-        return FALSE; /* errors and fatal errors cannot be disabled */
-    number -= 200;
-    if (number >= NUM_WARNINGS)
-        return FALSE;
-
-    index = number / 8;
-    mask = (unsigned char)(1 << (number % 8));
+void ReportManager::EnableWarning(int number, int enable) {
     switch (enable) {
         case 0:
-            warndisable[index] |= mask;
+            warn_disable_.emplace(number);
             break;
-        case 1:
-            warndisable[index] &= (unsigned char)~mask;
+        case 1: {
+            auto iter = warn_disable_.find(number);
+            if (iter != warn_disable_.end())
+                warn_disable_.erase(iter);
             break;
-        case 2:
-            warndisable[index] ^= mask;
+        }
+        case 2: {
+            auto iter = warn_disable_.find(number);
+            if (iter != warn_disable_.end())
+                warn_disable_.erase(iter);
+            else
+                warn_disable_.emplace(number);
             break;
+        }
     }
-
-    return TRUE;
 }
 
-#undef SCPACK_TABLE
+#ifndef NDEBUG
+void break_on_error(int number)
+{
+}
+#endif
+
+MessageBuilder&
+MessageBuilder::operator <<(Type* type)
+{
+    args_.emplace_back(type->prettyName());
+    return *this;
+}
+
+MessageBuilder&
+MessageBuilder::operator <<(QualType type)
+{
+    std::string message;
+    if (type.is_const())
+        message += "const ";
+    message += type->prettyName();
+    args_.emplace_back(message);
+    return *this;
+}
+
+ReportManager::ReportManager(CompileContext& cc)
+  : cc_(cc)
+{
+}
+
+unsigned int ReportManager::NumErrorMessages() const {
+    unsigned int total = 0;
+    for (const auto& report : error_list_) {
+        if (report.type == ErrorType::Error)
+            total++;
+    }
+    return total;
+}
+
+unsigned int ReportManager::NumWarnMessages() const {
+    unsigned int total = 0;
+    for (const auto& report : error_list_) {
+        if (report.type == ErrorType::Warning)
+            total++;
+    }
+    return total;
+}
+
+bool ReportManager::IsWarningDisabled(int number) {
+    return warn_disable_.count(number) > 0;
+}
+
+void ReportManager::PushAutoDefer(AutoDeferReports* defer) {
+    defers_.emplace_back(defer);
+}
+
+void ReportManager::PopAutoDefer(AutoDeferReports* defer) {
+    assert(!defers_.empty());
+    assert(defers_.back() == defer);
+    defers_.pop_back();
+}
+
+AutoCountErrors::AutoCountErrors()
+  : reports_(CompileContext::get().reports()),
+    old_errors_(reports_->total_errors())
+{
+}
+
+void AutoCountErrors::Reset() {
+    old_errors_ = reports_->total_errors();
+}
+
+bool AutoCountErrors::ok() const {
+    return old_errors_ == reports_->total_errors();
+}
+
+AutoDeferReports::AutoDeferReports(CompileContext& cc)
+  : reports_(cc.reports())
+{
+    reports_->PushAutoDefer(this);
+}
+
+AutoDeferReports::~AutoDeferReports() {
+    if (reports_)
+        reports_->PopAutoDefer(this);
+}
+
+void AutoDeferReports::Report() {
+    if (!reports_)
+        return;
+
+    reports_->PopAutoDefer(this);
+
+    for (auto&& report : deferred_)
+        reports_->ReportError(std::move(report));
+    deferred_.clear();
+    reports_ = nullptr;
+}
+
+void AutoDeferReports::AddDeferred(ErrorReport&& report) {
+    if (report.type == ErrorType::Error)
+        has_errors_ = true;
+    else
+        has_warnings_ = true;
+    deferred_.emplace_back(std::move(report));
+}
+
+} // namespace cc
+} // namespace sp

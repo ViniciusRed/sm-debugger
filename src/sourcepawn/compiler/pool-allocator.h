@@ -1,4 +1,4 @@
-// vim: set sts=2 ts=8 sw=2 tw=99 et:
+// vim: set sts=4 ts=8 sw=4 tw=99 et:
 //
 // Copyright (C) 2012-2014 David Anderson
 //
@@ -15,16 +15,27 @@
 //
 // You should have received a copy of the GNU General Public License along with
 // SourcePawn. If not, see http://www.gnu.org/licenses/.
-#ifndef _include_jitcraft_pool_allocator_h_
-#define _include_jitcraft_pool_allocator_h_
+#pragma once
 
-#include <new>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <limits.h>
+#include <string.h>
+
+#include <memory>
+#include <new>
+#include <string>
+#include <unordered_map>
+
+#include <amtl/am-bits.h>
 #include <amtl/am-fixedarray.h>
-#include <amtl/am-uniqueptr.h>
+#include <amtl/am-hashtable.h>
 #include <amtl/am-vector.h>
+
+#include "shared/string-pool.h"
+
+namespace sp {
+namespace cc {
 
 // Allocates memory in chunks that are not freed until the entire allocator
 // is freed. This is intended for use with large, temporary data structures.
@@ -33,7 +44,7 @@ class PoolAllocator final
     friend class PoolAllocationScope;
 
     struct Pool {
-        ke::UniquePtr<char[]> base;
+        std::unique_ptr<char[]> base;
         char* ptr = nullptr;
         char* end = nullptr;
 
@@ -42,14 +53,15 @@ class PoolAllocator final
         }
     };
 
-    static const size_t kDefaultPoolSize = 8 * 1024;
+    static const size_t kDefaultPoolSize = 64 * 1024;
     static const size_t kMaxReserveSize = 64 * 1024;
+    static const size_t kAlignment = sizeof(void*);
 
   private:
-    ke::Vector<ke::UniquePtr<Pool>> pools_;
+    std::vector<std::unique_ptr<Pool>> pools_;
+    size_t wasted_ = 0;
 
   private:
-    void unwind(char* pos);
     Pool* ensurePool(size_t actualBytes);
 
   public:
@@ -69,7 +81,7 @@ class PoolAllocator final
 
     void* rawAllocate(size_t bytes) {
         // Guarantee malloc alignment.
-        size_t actualBytes = ke::Align(bytes, ke::kMallocAlignment);
+        size_t actualBytes = ke::Align(bytes, kAlignment);
         Pool* last = pools_.empty() ? nullptr : pools_.back().get();
         if (!last || (size_t(last->end - last->ptr) < actualBytes))
             last = ensurePool(actualBytes);
@@ -77,6 +89,12 @@ class PoolAllocator final
         last->ptr += actualBytes;
         return ptr;
     }
+
+    void trackFree(size_t bytes) {
+        wasted_ += bytes;
+    }
+
+    size_t wasted() const { return wasted_; }
 
     template <typename T>
     T* alloc(size_t count = 1) {
@@ -90,77 +108,7 @@ class PoolAllocator final
 
         return reinterpret_cast<T*>(ptr);
     }
-
-    char* enter();
-    void leave(char* position);
 };
 
-extern PoolAllocator gPoolAllocator;
-
-class PoolScope final
-{
-    PoolAllocator* pool_;
-    char* position_;
-
-  public:
-    PoolScope()
-      : pool_(nullptr),
-        position_(nullptr)
-    {
-    }
-    explicit PoolScope(PoolAllocator& allocator)
-      : pool_(&allocator),
-        position_(allocator.enter())
-    {}
-    ~PoolScope() {
-        if (pool_)
-          pool_->leave(position_);
-    }
-
-    void enter(PoolAllocator& pool) {
-        assert(!pool_);
-        pool_ = &pool;
-        position_ = pool.enter();
-    }
-
-  private:
-    PoolScope(const PoolScope& other) = delete;
-    PoolScope& operator =(const PoolScope& other) = delete;
-};
-
-class PoolObject
-{
-  public:
-    void* operator new(size_t size) {
-        return gPoolAllocator.rawAllocate(size);
-    }
-    void* operator new [](size_t size) {
-        return gPoolAllocator.rawAllocate(size);
-    }
-
-    // Using delete on pool-allocated objects is illegal.
-    void operator delete(void* ptr) {
-        assert(false);
-    }
-    void operator delete [](void* ptr) {
-        assert(false);
-    }
-};
-
-class PoolAllocationPolicy
-{
-  protected:
-    void reportAllocationOverflow();
-    void reportOutOfMemory();
-
-  public:
-    void* am_malloc(size_t bytes);
-    void am_free(void* ptr);
-};
-
-template <typename T>
-class PoolList final : public ke::Vector<T, PoolAllocationPolicy>
-{
-};
-
-#endif // _include_jitcraft_pool_allocator_h_
+} // namespace cc
+} // namespace sp
