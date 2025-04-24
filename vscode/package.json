@@ -76,7 +76,7 @@
 		"configuration": {
 			"id": "sourcepawn-remote-debug",
 			"type": "object",
-			"title": "SourceMod Configuration for SourcePawn",
+			"title": "SourcePawn Remote Debug",
 			"properties": {
 				"sourcepawn-remote-debug.remoteHost": {
 					"type": "string",
@@ -102,30 +102,49 @@
 		},
 		"debuggers": [
 			{
+			"type": "sourcepawn",
+			"label": "SourcePawn Remote Debugger",
+			"program": "./dist/extension.js",
+			"runtime": "node",
+			"configurationAttributes": {
+				"launch": {
+				"required": ["program"],
+				"properties": {
+					"program": {
+					"type": "string",
+					"description": "Path to the program.",
+					"default": "${workspaceFolder}/scripting/test.sp"
+					},
+					"stopOnEntry": {
+					"type": "boolean",
+					"description": "Automatically stop after launch.",
+					"default": false
+					}
+				}
+				}
+			},
+			"initialConfigurations": [
+				{
 				"type": "sourcepawn",
-				"label": "sourcepawn Debugger",
-				"runtime": "node",
-				"program": "./out/debugAdapter.js",
-				"initialConfigurations": [
-					{
-						"type": "sourcepawn",
-						"request": "launch",
-						"name": "Run remote debugger",
-						"program": "${workspaceFolder}/test"
-					}
-				],
-				"configurationSnippets": [
-					{
-						"label": "sourcepawn Remote Debug: Launch",
-						"description": "A new configuration for remote debugging sourcepawn runtime.",
-						"body": {
-							"type": "sourcepawn",
-							"request": "launch",
-							"name": "Run remote debugger",
-							"program": "${workspaceFolder}/test"
-						}
-					}
-				]
+				"request": "launch",
+				"name": "Launch SourcePawn Remote Debug",
+				"program": "${workspaceFolder}/scripting/test.sp",
+				"stopOnEntry": false
+				}
+			],
+			"configurationSnippets": [
+				{
+				"label": "SourcePawn: Remote Debug",
+				"description": "Remote debugging configuration for SourcePawn",
+				"body": {
+					"type": "sourcepawn",
+					"request": "launch",
+					"name": "Launch SourcePawn Remote Debug",
+					"program": "${workspaceFolder}/scripting/test.sp",
+					"stopOnEntry": false
+				}
+				}
+			]
 			}
 		]
 	}

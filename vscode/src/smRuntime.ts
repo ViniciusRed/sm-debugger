@@ -700,6 +700,17 @@ export function getConnectionInfo() {
     return info;
 }
 
+/**
+ * Send a request to set a variable value
+ */
 export function sendRequestSendVariable(name: string, value: string, index: number) {
-	throw new Error('Function not implemented.');
+    debugLog('DEBUG', `Setting variable '${name}' to '${value}' at index ${index}`);
+    
+    const payload = Buffer.concat([
+        writeString(name), 
+        writeString(value), 
+        writeInt(index)
+    ]);
+    
+    return sendMessage(MessageType.RequestSetVariable, payload);
 }

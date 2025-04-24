@@ -33,6 +33,7 @@
 
 #include "sourcepawn/include/sp_vm_types.h"
 #include <nlohmann/json.hpp>
+#include <strings.h>
 
 using namespace sp;
 using namespace brynet;

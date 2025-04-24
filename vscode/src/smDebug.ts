@@ -13,6 +13,8 @@ import {
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path';
+import * as path from 'path';
+import * as fs from 'fs';
 
 import * as amxx from './smRuntime'
 
@@ -198,6 +200,51 @@ export class AmxModXDebugSession extends LoggingDebugSession {
 
 		// notify the launchRequest that configuration has finished
 		this._configurationDone.notify();
+	}
+
+	protected convertClientPathToDebugger(clientPath: string): string {
+		// Normalize path separators to forward slashes
+		const normalized = clientPath.replace(/\\/g, '/');
+
+		// Extract the filename from the path
+		const filename = basename(normalized);
+
+		// Log the path conversion for debugging
+		console.log(`Converting client path: ${clientPath} -> ${filename}`);
+
+		return filename;
+	}
+
+	protected convertDebuggerPathToClient(debuggerPath: string): string {
+		// If the debugger path is already absolute, return it
+		if (path.isAbsolute(debuggerPath)) {
+			return debuggerPath;
+		}
+
+		// Try to find the file in the workspace folders
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (workspaceFolders) {
+			for (const folder of workspaceFolders) {
+				// Try with different extensions
+				const extensions = ['.sp', '.inc'];
+				for (const ext of extensions) {
+					// Only add extension if the file doesn't already have one
+					const fileToCheck = debuggerPath.endsWith(ext)
+						? debuggerPath
+						: `${debuggerPath}${ext}`;
+
+					const possiblePath = path.join(folder.uri.fsPath, fileToCheck);
+					if (fs.existsSync(possiblePath)) {
+						console.log(`Found matching file: ${possiblePath}`);
+						return possiblePath;
+					}
+				}
+			}
+		}
+
+		// If we couldn't find the file, return the original path
+		console.log(`Could not find matching file for: ${debuggerPath}`);
+		return debuggerPath;
 	}
 
 	protected connected() {
@@ -683,6 +730,19 @@ export class AmxModXDebugSession extends LoggingDebugSession {
 		if (!filePath || filePath.length === 0) {
 			return undefined;
 		}
-		return new Source(basename(filePath), this.convertDebuggerPathToClient(filePath), undefined, undefined, 'as-adapter-data');
+
+		// Convert the debugger path to a client path
+		const clientPath = this.convertDebuggerPathToClient(filePath);
+
+		// Log the source creation for debugging
+		console.log(`Creating source: ${filePath} -> ${clientPath}`);
+
+		return new Source(
+			basename(clientPath),
+			clientPath,
+			undefined,
+			undefined,
+			'as-adapter-data'
+		);
 	}
 }
