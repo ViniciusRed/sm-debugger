@@ -495,10 +495,10 @@ public:
         if ((sym->vclass() & ~DISP_MASK) == 0) {
             const char* tagname = current_image->GetTagName(sym->tagid());
             if (tagname != nullptr) {
-                if (!stricmp(tagname, "bool")) {
+                if (!strcasecmp(tagname, "bool")) {
                     sym->setVClass(sym->vclass() | DISP_BOOL);
                 }
-                else if (!stricmp(tagname, "float")) {
+                else if (!strcasecmp(tagname, "float")) {
                     sym->setVClass(sym->vclass() | DISP_FLOAT);
                 }
             }
@@ -1344,8 +1344,6 @@ void debugThread() {
         mainLoop->loop(1000);
     }
 }
-
-
 
 /**
  * @brief Called on debug spew.
