@@ -17,6 +17,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <smx/smx-legacy-debuginfo.h>
+
+// Typedefs para facilitar o uso dos tipos de símbolo
+using Symbol = sp::sp_fdbg_symbol_t;
+using UnpackedSymbol = sp::sp_u_fdbg_symbol_t;
+using ArrayDim = sp::sp_fdbg_arraydim_t;
+using UnpackedArrayDim = sp::sp_u_fdbg_arraydim_t;
 
 #ifndef DEBUG
 #define DEBUG 1
@@ -196,19 +203,19 @@ public:
 #define DISP_MASK 0x0f
 
     char*
-        get_string(SmxV1Image::Symbol* sym)
+        get_string(Symbol* sym)
     {
-        assert(sym->ident() == sp::IDENT_ARRAY
-            || sym->ident() == sp::IDENT_REFARRAY);
-        assert(sym->dimcount() == 1);
+        assert(sym->ident == static_cast<int>(sp::IDENT_ARRAY)
+            || sym->ident == static_cast<int>(sp::IDENT_REFARRAY));
+        assert(sym->dimcount == 1);
 
         // get the starting address and the length of the string
         cell_t* addr;
-        cell_t base = sym->addr();
-        if (sym->vclass() == 1
-            || sym->vclass() == 3) // local var or arg but not static
+        cell_t base = sym->addr;
+        if (sym->vclass == 1
+            || sym->vclass == 3) // local var or arg but not static
             base += frm_; // addresses of local vars are relative to the frame
-        if (sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &addr);
             assert(addr != nullptr);
             base = *addr;
@@ -221,16 +228,16 @@ public:
     }
 
     int
-        get_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t* value)
+        get_symbolvalue(const Symbol* sym, int index, cell_t* value)
     {
         cell_t* vptr;
-        cell_t base = sym->addr();
-        if (sym->vclass() & DISP_MASK)
+        cell_t base = sym->addr;
+        if (sym->vclass & DISP_MASK)
             base += frm_; // addresses of local vars are relative to the frame
 
         // a reference
-        if (sym->ident() == sp::IDENT_REFERENCE
-            || sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident == sp::IDENT_REFERENCE
+            || sym->ident == sp::IDENT_REFARRAY) {
             if (context_->LocalToPhysAddr(base, &vptr) != SP_ERROR_NONE)
                 return false;
 
@@ -453,30 +460,30 @@ public:
         return json;
     }
     variable_s
-        display_variable(SmxV1Image::Symbol* sym, uint32_t index[], int idxlevel,
+        display_variable(Symbol* sym, uint32_t index[], int idxlevel,
             bool noarray = false)
     {
         nlohmann::json json;
         variable_s var;
         var.name = "N/A";
-        if (current_image->GetDebugName(sym->name()) != nullptr) {
-            var.name = current_image->GetDebugName(sym->name());
+        if (current_image->GetDebugName(sym->name) != nullptr) {
+            var.name = current_image->GetDebugName(sym->name);
         };
         var.type = "N/A";
         var.value = "";
         cell_t value;
-        std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> symdims;
+        std::unique_ptr<std::vector<ArrayDim*>> symdims;
         assert(index != NULL);
         auto rtti = sym->rtti();
         if (rtti && rtti->type_id) {
             uint32_t base = static_cast<uint32_t>(rtti->address);
-            if (sym->vclass() == 1
-                || sym->vclass() == 3) // local var or arg but not static
+            if (sym->vclass == 1
+                || sym->vclass == 3) // local var or arg but not static
                 base += frm_; // addresses of local vars are relative to the frame
 
             try {
                 auto json = read_variable(base, rtti->type_id, nullptr,
-                    sym->vclass() == 0x3);
+                    sym->vclass == 0x3);
                 if (!json.empty()) {
                     var.value = json.dump();
                     return var;
@@ -487,26 +494,26 @@ public:
             }
         }
         // first check whether the variable is visible at all
-        if ((uint32_t)cip_ < sym->codestart() || (uint32_t)cip_ > sym->codeend()) {
+        if ((uint32_t)cip_ < sym->codestart || (uint32_t)cip_ > sym->codeend) {
             var.value = "Not in scope.";
             return var;
         }
 
         // set default display type for the symbol (if none was set)
-        if ((sym->vclass() & ~DISP_MASK) == 0) {
-            const char* tagname = current_image->GetTagName(sym->tagid());
+        if ((sym->vclass & ~DISP_MASK) == 0) {
+            const char* tagname = current_image->GetTagName(sym->tagid);
             if (tagname != nullptr) {
                 if (!strcasecmp(tagname, "bool")) {
-                    sym->setVClass(sym->vclass() | DISP_BOOL);
+                    sym->setVClass(sym->vclass | DISP_BOOL);
                 }
                 else if (!strcasecmp(tagname, "float")) {
-                    sym->setVClass(sym->vclass() | DISP_FLOAT);
+                    sym->setVClass(sym->vclass | DISP_FLOAT);
                 }
             }
-            if ((sym->vclass() & ~DISP_MASK) == 0
-                && (sym->ident() == sp::IDENT_ARRAY
-                    || sym->ident() == sp::IDENT_REFARRAY)
-                && sym->dimcount() == 1) {
+            if ((sym->vclass & ~DISP_MASK) == 0
+                && (sym->ident == sp::IDENT_ARRAY
+                    || sym->ident == sp::IDENT_REFARRAY)
+                && sym->dimcount == 1) {
                 /* untagged array with a single dimension, walk through all
                  * elements and check whether this could be a string
                  */
@@ -521,21 +528,21 @@ public:
                             break; // want a letter at the start
                     }
                     if (i > 0 && ptr[i] == '\0')
-                        sym->setVClass(sym->vclass() | DISP_STRING);
+                        sym->setVClass(sym->vclass | DISP_STRING);
                 }
             }
         }
 
-        if (sym->ident() == sp::IDENT_ARRAY
-            || sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident == sp::IDENT_ARRAY
+            || sym->ident == sp::IDENT_REFARRAY) {
             int dim;
-            symdims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(
+            symdims = std::make_unique<std::vector<ArrayDim*>>(
                 *current_image->GetArrayDimensions(sym));
             // check whether any of the indices are out of range
             assert(symdims != nullptr);
             for (dim = 0; dim < idxlevel; dim++) {
-                if (symdims->at(dim)->size() > 0
-                    && index[dim] >= symdims->at(dim)->size())
+                if (symdims->at(dim)->size > 0
+                    && index[dim] >= symdims->at(dim)->size)
                     break;
             }
             if (dim < idxlevel) {
@@ -545,11 +552,11 @@ public:
         }
 
         // Print first dimension of array
-        if ((sym->ident() == sp::IDENT_ARRAY
-            || sym->ident() == sp::IDENT_REFARRAY)
+        if ((sym->ident == sp::IDENT_ARRAY
+            || sym->ident == sp::IDENT_REFARRAY)
             && idxlevel == 0) {
             // Print string
-            if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
+            if ((sym->vclass & ~DISP_MASK) == DISP_STRING) {
                 var.type = "String";
                 char* str = get_string(sym);
                 if (str != nullptr) {
@@ -559,13 +566,13 @@ public:
                     var.value = "NULL_STRING";
             }
             // Print one-dimensional array
-            else if (sym->dimcount() == 1) {
+            else if (sym->dimcount == 1) {
                 if (!noarray)
                     var.type = "Array";
                 assert(symdims != nullptr); // set in the previous block
-                uint32_t len = symdims->at(0)->size();
+                uint32_t len = symdims->at(0)->size;
                 uint32_t i;
-                auto type = (sym->vclass() & ~DISP_MASK);
+                auto type = (sym->vclass & ~DISP_MASK);
                 if (type == DISP_FLOAT) {
                     json = std::vector<float>();
                 }
@@ -595,8 +602,8 @@ public:
                 var.value = "(multi-dimensional array)";
             }
         }
-        else if (sym->ident() != sp::IDENT_ARRAY
-            && sym->ident() != sp::IDENT_REFARRAY && idxlevel > 0) {
+        else if (sym->ident != sp::IDENT_ARRAY
+            && sym->ident != sp::IDENT_REFARRAY && idxlevel > 0) {
             // index used on a non-array
             var.value = "(invalid index, not an array)";
         }
@@ -616,10 +623,10 @@ public:
             }
 
             if (get_symbolvalue(sym, base + index[dim], &value)
-                && sym->dimcount() == idxlevel)
-                printvalue(value, (sym->vclass() & ~DISP_MASK), var.value,
+                && sym->dimcount == idxlevel)
+                printvalue(value, (sym->vclass & ~DISP_MASK), var.value,
                     var.type);
-            else if (sym->dimcount() != idxlevel)
+            else if (sym->dimcount != idxlevel)
                 var.value = "(invalid number of dimensions)";
             else
                 var.value = "(?)";
@@ -658,18 +665,17 @@ public:
             }
         }
     }
-
     int
-        set_symbolvalue(const SmxV1Image::Symbol* sym, int index, cell_t value)
+        set_symbolvalue(const Symbol* sym, int index, cell_t value)
     {
         cell_t* vptr;
-        cell_t base = sym->addr();
-        if (sym->vclass() & DISP_MASK)
+        cell_t base = sym->addr;
+        if (sym->vclass & DISP_MASK)
             base += frm_; // addresses of local vars are relative to the frame
 
         // a reference
-        if (sym->ident() == sp::IDENT_REFERENCE
-            || sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident == sp::IDENT_REFERENCE
+            || sym->ident == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &vptr);
             assert(vptr != nullptr);
             base = *vptr;
@@ -682,29 +688,29 @@ public:
     }
 
     bool
-        SetSymbolString(const SmxV1Image::Symbol* sym, char* str)
+        SetSymbolString(const Symbol* sym, char* str)
     {
-        assert(sym->ident() == sp::IDENT_ARRAY
-            || sym->ident() == sp::IDENT_REFARRAY);
-        assert(sym->dimcount() == 1);
+        assert(sym->ident == sp::IDENT_ARRAY
+            || sym->ident == sp::IDENT_REFARRAY);
+        assert(sym->dimcount == 1);
 
         cell_t* vptr;
-        cell_t base = sym->addr();
-        if (sym->vclass() & DISP_MASK)
+        cell_t base = sym->addr;
+        if (sym->vclass & DISP_MASK)
             base += frm_; // addresses of local vars are relative to the frame
 
         // a reference
-        if (sym->ident() == sp::IDENT_REFERENCE
-            || sym->ident() == sp::IDENT_REFARRAY) {
+        if (sym->ident == sp::IDENT_REFERENCE
+            || sym->ident == sp::IDENT_REFARRAY) {
             context_->LocalToPhysAddr(base, &vptr);
             assert(vptr != nullptr);
             base = *vptr;
         }
 
-        std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> dims;
-        dims = std::make_unique<std::vector<SmxV1Image::ArrayDim*>>(
+        std::unique_ptr<std::vector<ArrayDim*>> dims;
+        dims = std::make_unique<std::vector<ArrayDim*>>(
             *current_image->GetArrayDimensions(sym));
-        return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL)
+        return context_->StringToLocalUTF8(base, dims->at(0)->size, str, NULL)
             == SP_ERROR_NONE;
     }
 
@@ -715,14 +721,14 @@ public:
         bool valid_value = true;
         if (current_state != DebugRun) {
             auto imagev1 = current_image.get();
-            std::unique_ptr<SmxV1Image::Symbol> sym;
+            std::unique_ptr<Symbol> sym;
             cell_t result = 0;
             value.erase(remove(value.begin(), value.end(), '\"'),
                 value.end());
             if (imagev1->GetVariable(var.c_str(), cip_, sym)) {
-                if ((sym->ident() == IDENT_ARRAY
-                    || sym->ident() == IDENT_REFARRAY)) {
-                    if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
+                if ((sym->ident == IDENT_ARRAY
+                    || sym->ident == IDENT_REFARRAY)) {
+                    if ((sym->vclass & ~DISP_MASK) == DISP_STRING) {
                         SetSymbolString(sym.get(),
                             const_cast<char*>(value.c_str()));
                     }
@@ -779,7 +785,7 @@ public:
         if (current_state != DebugRun) {
             auto imagev1 = current_image.get();
 
-            std::unique_ptr<SmxV1Image::Symbol> sym;
+            std::unique_ptr<Symbol> sym;
             if (current_image && imagev1) {
 #define sDIMEN_MAX 4
                 uint32_t idx[sDIMEN_MAX], dim;
@@ -791,13 +797,13 @@ public:
                         = imagev1->symboliterator(global_scope);
                     while (!iter.Done()) {
                         const auto sym = iter.Next();
-
-                        // Only variables in scope.
-                        if (sym->ident() != sp::IDENT_FUNCTION
-                            && (sym->codestart() <= (uint32_t)cip_
-                                && sym->codeend() >= (uint32_t)cip_)
-                            || global_scope) {
-                            auto var = display_variable(sym, idx, dim);
+    
+                            // Only variables in scope.
+                            if (sym->ident() != sp::IDENT_FUNCTION
+                                && (sym->codestart() <= (uint32_t)cip_
+                                    && sym->codeend() >= (uint32_t)cip_)
+                                || global_scope) {
+                                auto var = display_variable(reinterpret_cast<Symbol*>(sym), idx, dim);
                             if (local_scope) {
                                 if ((sym->vclass() & DISP_MASK) > 0) {
                                     vars.push_back(var);
