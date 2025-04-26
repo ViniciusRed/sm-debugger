@@ -17,13 +17,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <smx/smx-legacy-debuginfo.h>
-
-// Typedefs para facilitar o uso dos tipos de símbolo
-using Symbol = sp::sp_fdbg_symbol_t;
-using UnpackedSymbol = sp::sp_u_fdbg_symbol_t;
-using ArrayDim = sp::sp_fdbg_arraydim_t;
-using UnpackedArrayDim = sp::sp_u_fdbg_arraydim_t;
 
 #ifndef DEBUG
 #define DEBUG 1
@@ -38,7 +31,10 @@ using UnpackedArrayDim = sp::sp_u_fdbg_arraydim_t;
 #include <brynet/net/wrapper/ConnectionBuilder.hpp>
 #include <brynet/net/wrapper/ServiceBuilder.hpp>
 
-#include "sourcepawn/include/sp_vm_types.h"
+#include "sp_vm_types.h"
+#include "smx-v1-image.h"
+#include "rtti.h"
+#include <smx/smx-legacy-debuginfo.h>
 #include <nlohmann/json.hpp>
 #include <strings.h>
 
@@ -46,6 +42,11 @@ using namespace sp;
 using namespace brynet;
 using namespace brynet::net;
 using namespace brynet::net::http;
+
+using Symbol = sp::sp_fdbg_symbol_t;
+using UnpackedSymbol = sp::sp_u_fdbg_symbol_t;
+using ArrayDim = sp::sp_fdbg_arraydim_t;
+using UnpackedArrayDim = sp::sp_u_fdbg_arraydim_t;
 
 //
 //  Lowercases string
@@ -504,10 +505,10 @@ public:
             const char* tagname = current_image->GetTagName(sym->tagid);
             if (tagname != nullptr) {
                 if (!strcasecmp(tagname, "bool")) {
-                    sym->setVClass(sym->vclass | DISP_BOOL);
+                    sym->vclass |= DISP_BOOL;
                 }
                 else if (!strcasecmp(tagname, "float")) {
-                    sym->setVClass(sym->vclass | DISP_FLOAT);
+                    sym->vclass |= DISP_FLOAT;
                 }
             }
             if ((sym->vclass & ~DISP_MASK) == 0
@@ -528,7 +529,7 @@ public:
                             break; // want a letter at the start
                     }
                     if (i > 0 && ptr[i] == '\0')
-                        sym->setVClass(sym->vclass | DISP_STRING);
+                        sym->vclass |= DISP_STRING;
                 }
             }
         }
@@ -633,19 +634,18 @@ public:
         }
         return var;
     }
-
     void
         evaluateVar(int frame_id, char* variable)
     {
         if (current_state != DebugRun) {
             auto imagev1 = current_image.get();
 
-            std::unique_ptr<SmxV1Image::Symbol> sym;
+            std::unique_ptr<Symbol> sym;
             if (imagev1->GetVariable(variable, cip_, sym)) {
                 uint32_t idx[MAX_DIMS], dim;
                 dim = 0;
                 memset(idx, 0, sizeof idx);
-                auto var = display_variable(sym.get(), idx, dim);
+                auto var = display_variable(reinterpret_cast<Symbol*>(sym.get()), idx, dim);
                 CUtlBuffer buffer;
                 buffer.PutUnsignedInt(0);
                 {
@@ -654,7 +654,6 @@ public:
                     buffer.PutString(var.name.c_str());
                     buffer.PutInt(var.value.size() + 1);
                     buffer.PutString(var.value.c_str());
-                    ;
                     buffer.PutInt(var.type.size() + 1);
                     buffer.PutString(var.type.c_str());
                     buffer.PutInt(0);
@@ -729,7 +728,7 @@ public:
                 if ((sym->ident == IDENT_ARRAY
                     || sym->ident == IDENT_REFARRAY)) {
                     if ((sym->vclass & ~DISP_MASK) == DISP_STRING) {
-                        SetSymbolString(sym.get(),
+                        SetSymbolString(reinterpret_cast<const Symbol*>(sym.get()),
                             const_cast<char*>(value.c_str()));
                     }
                     valid_value = false;
