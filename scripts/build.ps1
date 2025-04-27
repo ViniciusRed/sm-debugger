@@ -5,7 +5,7 @@ $hash = (git -C .\dep\vcpkg rev-parse HEAD)
 if (Test-Path vcpkg.json) {
     $json = Get-Content -Raw vcpkg.json | ConvertFrom-Json
     $json.'builtin-baseline' = $hash
-    $json | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json
+    $json | ConvertTo-Json -Depth 5 | Set-Content vcpkg.json
 } else {
     @{ 'builtin-baseline' = $hash } | ConvertTo-Json | Set-Content vcpkg.json
 }
@@ -14,6 +14,12 @@ if (Test-Path vcpkg.json) {
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Falha ao atualizar vcpkg.json"
     exit 1
+}
+
+# Remover a pasta build se existir
+if (Test-Path build) {
+    Write-Host "Removendo pasta build existente..." -ForegroundColor Yellow
+    Remove-Item -Path build -Recurse -Force
 }
 
 # Bootstrap vcpkg
