@@ -26,7 +26,7 @@
     {
       "label": "Build Windows",
       "type": "shell",
-      "command": "powershell -Command \"$hash = (git -C .\\dep\\vcpkg rev-parse HEAD); if (Test-Path vcpkg.json) { $json = Get-Content -Raw vcpkg.json | ConvertFrom-Json; $json.'builtin-baseline' = $hash; $json | ConvertTo-Json -Depth 10 | Set-Content vcpkg.json } else { @{ 'builtin-baseline' = $hash } | ConvertTo-Json | Set-Content vcpkg.json }; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\bootstrap-vcpkg.bat'; if ($LASTEXITCODE -eq 0) { & '.\\dep\\vcpkg\\vcpkg' install --triplet x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE='./dep/vcpkg/scripts/buildsystems/vcpkg.cmake' -DVCPKG_TARGET_TRIPLET=x86-windows-static; if ($LASTEXITCODE -eq 0) { cmake --build build --config Release --parallel } } } }\"",
+      "command": ".\\scripts\\build.ps1",
       "options": {
         "cwd": "${workspaceFolder}"
       },

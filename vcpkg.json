@@ -1,11 +1,11 @@
 {
-  "name": "sourcepawn-debugger",
-  "version-string": "0.1.0",
-  "dependencies": [
-    "nlohmann-json",
-    "fmt",
-    "brynet",
-    "zlib"
-  ],
-  "builtin-baseline": "856505bb767458c99d8e3c3ed441f59a058d3687"
+    "name":  "sourcepawn-debugger",
+    "version-string":  "0.1.0",
+    "dependencies":  [
+                         "nlohmann-json",
+                         "fmt",
+                         "brynet",
+                         "zlib"
+                     ],
+    "builtin-baseline":  "856505bb767458c99d8e3c3ed441f59a058d3687"
 }

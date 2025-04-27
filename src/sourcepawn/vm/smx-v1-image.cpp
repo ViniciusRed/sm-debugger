@@ -32,6 +32,40 @@ SmxV1Image::SmxV1Image(uint8_t* addr, size_t length, void (*dtor)(uint8_t*))
 {
 }
 
+bool
+sp::SmxV1Image::GetVariable(const char* symname, uint32_t scopeaddr,
+                            std::unique_ptr<sp::Symbol>& sym) {
+    uint32_t codestart = 0;
+    uint32_t codeend = 0;
+
+    sym = nullptr;
+
+    sp::SymbolIterator iter = symboliterator(false);
+    while (!iter.Done()) {
+        // find (next) matching variable
+        sym = std::make_unique<Symbol>(iter.Next());
+
+        if (sym->codestart() <= scopeaddr && sym->codeend() >= scopeaddr &&
+            strcmp(debug_names_ + sym->name(), symname) == 0) {
+            break;
+        }
+        sym = nullptr;
+    }
+    if (sym == nullptr) {
+        iter = symboliterator(true);
+        while (!iter.Done()) {
+            // find (next) matching variable
+            sym = std::make_unique<Symbol>(iter.Next());
+
+            if (strcmp(debug_names_ + sym->name(), symname) == 0) {
+                break;
+            }
+            sym = nullptr;
+        }
+    }
+    return sym != nullptr;
+}
+
 // Validating SMX v1 scripts is fairly expensive. We reserve real validation
 // for v2.
 bool
@@ -752,6 +786,51 @@ SmxV1Image::validateSymbolAddress(int32_t address, uint8_t vclass, const sp::deb
   return true;
 }
 
+std::vector<smx_rtti_es_field*>
+sp::SmxV1Image::getEnumFields(uint32_t index) {
+  const smx_rtti_enumstruct* enumstruct = getRttiRow<smx_rtti_enumstruct>(rtti_enumstructs_, index);
+
+  uint32_t stopat = rtti_enumstruct_fields_->row_count;
+  if(index != rtti_enumstructs_->row_count - 1) {
+    const smx_rtti_enumstruct* next_enumstruct = getRttiRow<smx_rtti_enumstruct>(rtti_enumstructs_, index + 1);
+    stopat = next_enumstruct->first_field;
+  }
+  if (enumstruct->first_field >= stopat)
+    return {};
+
+  std::vector<smx_rtti_es_field*> fields;
+  for (uint32_t j = enumstruct->first_field; j < stopat; j++) {
+      if(!validateRttiEnumStructField(enumstruct, j))
+        return {};
+      const smx_rtti_es_field* field = getRttiRow<smx_rtti_es_field>(rtti_enumstruct_fields_, j);
+      fields.push_back(const_cast<smx_rtti_es_field*>(field));
+  }
+  return fields;
+}
+
+std::vector<smx_rtti_field*>
+sp::SmxV1Image::getTypeFields(uint32_t index) {
+  const smx_rtti_classdef* classdef = getRttiRow<smx_rtti_classdef>(rtti_classdefs_, index);
+  // Calculate how many fields this class has.
+  uint32_t stopat = rtti_fields_->row_count;
+  if (index != rtti_classdefs_->row_count - 1) {
+      const smx_rtti_classdef* next_classdef =
+          getRttiRow<smx_rtti_classdef>(rtti_classdefs_, index + 1);
+      stopat = next_classdef->first_field;
+  }
+  if (classdef->first_field >= stopat)
+      return {};
+
+  std::vector<smx_rtti_field*> ret;
+  for (uint32_t j = classdef->first_field; j < stopat; j++) {
+      if (!validateRttiField(j))
+          return {};
+      const smx_rtti_field* field = getRttiRow<smx_rtti_field>(rtti_fields_, j);
+      ret.push_back(const_cast<smx_rtti_field*>(field));
+  }
+  return ret;
+}
+
 bool
 SmxV1Image::validateDebugMethods()
 {
@@ -820,6 +899,112 @@ SmxV1Image::GetNative(size_t index) const
 {
   assert(index < natives_.length());
   return names_ + natives_[index].name;
+}
+
+inline const char*
+sp::SmxV1Image::GetTagName(uint32_t tag) {
+  unsigned int index;
+  for (index = 0; index < tags_.length() && tags_[index].tag_id != tag; index++)
+      /* nothing */;
+  if (index >= tags_.length())
+      return nullptr;
+
+  return names_ + tags_[index].name;
+}
+
+
+std::vector<sp::ArrayDim*>*
+SmxV1Image::GetArrayDimensions(const Symbol* sym) {
+    if (sym->ident() != sp::IDENT_ARRAY && sym->ident() != IDENT_REFARRAY)
+        return nullptr;
+
+    assert(sym->dimcount() > 0); // array must have at least one dimension
+
+    // find he end of the symbol name
+    const char* ptr = (const char*)sym->sym();
+    auto type = sym->type();
+    if (type == Symbol::VAR_PACKED) {
+        ptr += sizeof(sp_fdbg_symbol_t);
+    } else if (type == Symbol::VAR_UNPACKED) {
+        ptr += sizeof(sp_u_fdbg_symbol_t);
+    }
+    if (type != Symbol::VAR_RTTI) {
+        std::vector<ArrayDim*>* dims = new std::vector<ArrayDim*>();
+        for (int i = 0; i < sym->dimcount(); i++) {
+            if (sym->packed()) {
+                dims->push_back(new sp::ArrayDim((sp_fdbg_arraydim_t*)ptr));
+                ptr += sizeof(sp_fdbg_arraydim_t);
+            } else {
+                // There's a padding of 2 bytes before this short.
+                ptr += 2;
+                dims->push_back(new sp::ArrayDim((sp_u_fdbg_arraydim_t*)ptr));
+                ptr += sizeof(sp_u_fdbg_arraydim_t);
+            }
+        }
+        return dims;
+    } else {
+        std::vector<sp::ArrayDim*>* dims = new std::vector<sp::ArrayDim*>();
+        auto sym = (smx_rtti_debug_var*)ptr;
+        int kind = (sym->type_id) & 0xf;
+        int payload = ((sym->type_id) >> 4) & 0xfffffff;
+        auto DecodeUint32 = [](unsigned char* bytes, int &offset) {
+            uint32_t value = 0;
+            int shift = 0;
+            for (;;) {
+                unsigned char b = bytes[offset++];
+                value |= (uint32_t)(b & 0x7f) << shift;
+                if ((b & 0x80) == 0)
+                    break;
+                shift += 7;
+            }
+            return (int)value;
+        };
+        std::function<void(unsigned char*, int&)> Decode;
+        Decode = [dims, DecodeUint32, &Decode](unsigned char* bytes, int& offset) {
+            unsigned char b = bytes[offset++];
+            switch (b) {
+                case cb::kFixedArray: {
+                    auto dimcount_ = DecodeUint32(bytes, offset);
+                    dims->push_back(new ArrayDim(dimcount_));
+                    Decode(bytes, offset);
+                    break;
+                }
+            }
+        };
+        if (kind == kTypeId_Inline) {
+            unsigned char temp[4];
+            temp[0] = (payload & 0xff);
+            temp[1] = ((payload >> 8) & 0xff);
+            temp[2] = ((payload >> 16) & 0xff);
+            temp[3] = ((payload >> 24) & 0xff);
+            int offset = 0;
+            Decode(temp, offset);
+        }
+        return dims;
+    }
+}
+
+sp::SymbolIterator
+sp::SmxV1Image::symboliterator(bool global) {
+    sp::SymbolIterator iter(nullptr, 0, 0, this);
+
+    if (debug_syms_) {
+        iter = sp::SymbolIterator((uint8_t*)debug_syms_, debug_symbols_section_->size, 1, this);
+    } else if (debug_syms_unpacked_) {
+        iter = sp::SymbolIterator((uint8_t*)debug_syms_unpacked_, debug_symbols_section_->size, 0, this);
+    } else if (!global) {
+        if (!rtti_dbg_locals_)
+            return iter; // Handle undefined locals_ gracefully.
+        const smx_rtti_debug_var* variable = getRttiRow<smx_rtti_debug_var>(rtti_dbg_locals_, 0);
+        iter = sp::SymbolIterator((uint8_t*)variable, rtti_dbg_locals_->row_size * sizeof(smx_rtti_debug_var), 2, this);
+    } else {
+        if (!rtti_dbg_globals_)
+            return iter; // Handle undefined globals_ gracefully.
+        const smx_rtti_debug_var* variable = getRttiRow<smx_rtti_debug_var>(rtti_dbg_globals_, 0);
+        iter = sp::SymbolIterator((uint8_t*)variable, rtti_dbg_locals_->row_size * sizeof(smx_rtti_debug_var), 3, this);
+    }
+
+    return iter;
 }
 
 bool
