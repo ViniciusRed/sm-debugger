@@ -467,7 +467,7 @@ public:
         var.type = "N/A";
         var.value = "";
         cell_t value;
-        std::unique_ptr<std::vector<SmxV1Image::ArrayDim*>> symdims;
+        std::unique_ptr<std::vector<sp::ArrayDim*>> symdims;
         assert(index != NULL);
         auto rtti = sym->rtti();
         if (rtti && rtti->type_id) {
