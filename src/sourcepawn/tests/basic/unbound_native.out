@@ -1,3 +1,0 @@
-Exception thrown: Native is not bound
-  [0] unbound_native()
-  [1] unbound_native.sp::main, line 6

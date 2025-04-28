@@ -1,1 +1,0 @@
-(3) : error 180: function return type differs from prototype. expected 'void', but got 'int'

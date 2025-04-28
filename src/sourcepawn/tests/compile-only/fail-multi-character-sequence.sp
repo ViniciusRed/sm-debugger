@@ -1,2 +1,0 @@
-char s = 'test';
-

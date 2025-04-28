@@ -1,2 +1,0 @@
-(2) : error 027: invalid character constant
-(3) : error 027: invalid character constant

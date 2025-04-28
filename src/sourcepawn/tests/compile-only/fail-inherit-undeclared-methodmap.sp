@@ -1,1 +1,0 @@
-methodmap A < B {}

@@ -1,2 +1,0 @@
-(3) : error 143: new-style declarations should not have "new"
-(5) : error 121: cannot specify array dimensions on both type and name

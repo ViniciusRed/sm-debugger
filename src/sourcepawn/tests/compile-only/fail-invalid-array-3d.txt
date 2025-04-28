@@ -1,3 +1,0 @@
-(7) : error 041: invalid ellipsis, array size is not known
-(15) : error 047: array sizes do not match, or destination array is too small
-(20) : error 047: array sizes do not match, or destination array is too small

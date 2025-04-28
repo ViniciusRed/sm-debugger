@@ -1,3 +1,0 @@
-public Blah() {}
-
-forward Blah();

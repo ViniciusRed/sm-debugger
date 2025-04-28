@@ -1,2 +1,0 @@
-//whee
-void unused() {}

@@ -1,2 +1,0 @@
-ignore-otherfile.sp(3) : error 017: undefined symbol "PrintToServer"
-ignore-otherfile.sp(4) : error 017: undefined symbol "PrintToServer"

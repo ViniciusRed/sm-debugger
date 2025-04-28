@@ -1,1 +1,0 @@
-(3) : error 001: expected token: "public", but found "-end of file-"

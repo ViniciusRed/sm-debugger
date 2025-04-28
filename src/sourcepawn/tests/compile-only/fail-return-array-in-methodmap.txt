@@ -1,1 +1,0 @@
-(2) : error 082: properties cannot be arrays

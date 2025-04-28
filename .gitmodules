@@ -1,6 +1,6 @@
 [submodule "dep/sourcemod"]
 	path = dep/sourcemod
-	url = https://github.com/alliedmodders/sourcemod
+	url = https://github.com/FestClub/sourcemod
 [submodule "dep/vcpkg"]
 	path = dep/vcpkg
 	url = https://github.com/microsoft/vcpkg
