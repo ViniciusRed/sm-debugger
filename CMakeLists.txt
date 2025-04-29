@@ -38,10 +38,11 @@ PROJECT_VERSION_FROM_GIT()
 
 # Lista de arquivos fonte
 set(CPP_FILES 
-    "src/sourcepawn/vm/smx-v1-image.cpp"
-    "src/sourcepawn/vm/file-utils.cpp"
-    "src/sourcepawn/vm/rtti.cpp"
+    "dep/sourcemod/sourcepawn/vm/smx-v1-image.cpp"
+    "dep/sourcemod/sourcepawn/vm/file-utils.cpp"
+    "dep/sourcemod/sourcepawn/vm/rtti.cpp"
     "src/extension.cpp"
+    "src/include/helper.cpp"
     "src/debugger.cpp"
     "src/utlbuffer.cpp"
 )
@@ -105,9 +106,10 @@ target_include_directories(${OUTPUT_NAME} PRIVATE
 )
 target_include_directories(${OUTPUT_NAME} PUBLIC 
     "src"
+    "src/include"
     "dep/certify/include"
-    "src/sourcepawn/include"
-    "src/sourcepawn/vm"
+    "dep/sourcemod/sourcepawn/include"
+    "dep/sourcemod/sourcepawn/vm"
     "dep/sourcemod/public/amtl"
 )
 

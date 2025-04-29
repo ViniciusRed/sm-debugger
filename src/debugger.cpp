@@ -35,6 +35,7 @@
 #include <smx-v1-image.h>
 #include <rtti.h>
 #include <smx/smx-legacy-debuginfo.h>
+#include <helper.h>
 #include <nlohmann/json.hpp>
 
 using namespace sp;
