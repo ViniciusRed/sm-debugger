@@ -102,6 +102,205 @@ struct smx_rtti_table_header {
     uint32_t row_count;
 };
 
+// Symbol class implementation
+Symbol::Symbol(sp_fdbg_symbol_t* sym, SmxV1Image* image)
+ : addr_(sym->addr)
+ , tagid_(sym->tagid)
+ , codestart_(sym->codestart)
+ , codeend_(sym->codeend)
+ , ident_(sym->ident)
+ , vclass_(sym->vclass)
+ , dimcount_(sym->dimcount)
+ , name_(sym->name)
+ , sym_(sym)
+ , type_(VAR_PACKED)
+ , unpacked_sym_(nullptr)
+ , rtti_sym(nullptr) {
+}
+
+Symbol::Symbol(sp_u_fdbg_symbol_t* sym, SmxV1Image* image)
+ : addr_(sym->addr)
+ , tagid_(sym->tagid)
+ , codestart_(sym->codestart)
+ , codeend_(sym->codeend)
+ , ident_(sym->ident)
+ , vclass_(sym->vclass)
+ , dimcount_(sym->dimcount)
+ , name_(sym->name)
+ , type_(VAR_UNPACKED)
+ , sym_(nullptr)
+ , unpacked_sym_(sym)
+ , rtti_sym(nullptr) {
+}
+
+Symbol::Symbol(smx_rtti_debug_var* sym, SmxV1Image* image)
+ : addr_(sym->address)
+ , codestart_(sym->code_start)
+ , codeend_(sym->code_end)
+ , name_(sym->name)
+ , type_(VAR_RTTI)
+ , sym_(nullptr)
+ , unpacked_sym_(nullptr)
+ , rtti_sym(sym) {
+    dimcount_ = 0;
+    tagid_ = 0;
+    
+    auto DecodeUint32 = [](unsigned char* bytes, int& offset) {
+        uint32_t value = 0;
+        int shift = 0;
+        for (;;) {
+            unsigned char b = bytes[offset++];
+            value |= (uint32_t)(b & 0x7f) << shift;
+            if ((b & 0x80) == 0)
+                break;
+            shift += 7;
+        }
+        return (int)value;
+    };
+    
+    std::function<void(unsigned char*, int&)> Decode;
+    Decode = [this, DecodeUint32, &Decode](unsigned char* bytes, int& offset) {
+        unsigned char b = bytes[offset++];
+        switch (b) {
+            case cb::kFixedArray: {
+                ident_ = IDENT_ARRAY;
+                DecodeUint32(bytes, offset);
+                dimcount_++;
+                Decode(bytes, offset);
+                break;
+            }
+        }
+    };
+    
+    vclass_ = sym->vclass;
+    int kind = (sym->type_id) & 0xf;
+    int payload = ((sym->type_id) >> 4) & 0xfffffff;
+    if (kind == kTypeId_Inline) {
+        unsigned char temp[4];
+        temp[0] = (payload & 0xff);
+        temp[1] = ((payload >> 8) & 0xff);
+        temp[2] = ((payload >> 16) & 0xff);
+        temp[3] = ((payload >> 24) & 0xff);
+        int offset = 0;
+        Decode(temp, offset);
+    }
+}
+
+Symbol::Symbol(Symbol* sym)
+ : addr_(sym->addr_)
+ , tagid_(sym->tagid_)
+ , codestart_(sym->codestart_)
+ , codeend_(sym->codeend_)
+ , ident_(sym->ident_)
+ , vclass_(sym->vclass_)
+ , dimcount_(sym->dimcount_)
+ , name_(sym->name_)
+ , sym_(sym->sym_)
+ , type_(sym->type_)
+ , rtti_sym(sym->rtti_sym)
+ , unpacked_sym_(sym->unpacked_sym_) {
+}
+
+const int32_t Symbol::addr() const {
+    return addr_;
+}
+
+const int16_t Symbol::tagid() const {
+    return tagid_;
+}
+
+const uint32_t Symbol::codestart() const {
+    return codestart_;
+}
+
+const uint32_t Symbol::codeend() const {
+    return codeend_;
+}
+
+const uint8_t Symbol::ident() const {
+    return ident_;
+}
+
+const uint8_t Symbol::vclass() const {
+    return vclass_;
+}
+
+const uint16_t Symbol::dimcount() const {
+    return dimcount_;
+}
+
+const uint32_t Symbol::name() const {
+    return name_;
+}
+
+void Symbol::setVClass(uint8_t vclass) {
+    vclass_ = vclass;
+    if (sym_)
+        sym_->vclass = vclass;
+    else if (unpacked_sym_)
+        unpacked_sym_->vclass = vclass;
+    else
+        rtti_sym->vclass = vclass;
+}
+
+const bool Symbol::packed() const {
+    return sym_ != nullptr;
+}
+
+const uint8_t Symbol::type() const {
+    return type_;
+}
+
+const smx_rtti_debug_var* Symbol::rtti() const {
+    return rtti_sym;
+}
+
+const void* Symbol::sym() const {
+    if (sym_) {
+        return sym_;
+    }
+    if (unpacked_sym_) {
+        return unpacked_sym_;
+    }
+    if (rtti_sym) {
+        return rtti_sym;
+    }
+    return nullptr;
+}
+
+// ArrayDim class implementation
+ArrayDim::ArrayDim(sp_fdbg_arraydim_t* dim)
+ : tagid_(dim->tagid)
+ , size_(dim->size) {
+}
+
+ArrayDim::ArrayDim(sp_u_fdbg_arraydim_t* dim)
+ : tagid_(dim->tagid)
+ , size_(dim->size) {
+}
+
+ArrayDim::ArrayDim(uint32_t size)
+ : tagid_(0)
+ , size_(size) {
+}
+
+int16_t ArrayDim::tagid() {
+    return tagid_;
+}
+
+uint32_t ArrayDim::size() {
+    return size_;
+}
+
+// SymbolIterator class implementation
+SymbolIterator::SymbolIterator(uint8_t* start, uint32_t debug_symbols_section_size, int type, SmxV1Image* image)
+ : cursor_(start)
+ , type_(type)
+ , image_(image) {
+    index_ = 0;
+    cursor_end_ = cursor_ + debug_symbols_section_size;
+}
+
 // Implementation of SymbolIterator methods
 bool SymbolIterator::Done() {
     if (type_ == 1) {
@@ -145,6 +344,14 @@ Symbol* SymbolIterator::Next() {
         index_++;
         return new Symbol(sym, image_);
     }
+}
+
+// Template function implementation
+template <typename T>
+inline const T* getRttiRow(const smx_rtti_table_header* header, size_t index) {
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(header) + header->header_size;
+    const uint8_t* row = base + (index * header->row_size);
+    return reinterpret_cast<const T*>(row);
 }
 
 // Standalone function implementations from smx-v1-image.cpp
@@ -476,14 +683,6 @@ bool SetSymbolString(SourcePawn::IPluginContext* context, cell_t frm, const Symb
     size_t size = 1024;
     
     return context->StringToLocalUTF8(base, size, str, NULL) == SP_ERROR_NONE;
-}
-
-// Utility for template parameter access
-template <typename T>
-inline const T* getRttiRow(const smx_rtti_table_header* header, size_t index) {
-    const uint8_t* base = reinterpret_cast<const uint8_t*>(header) + header->header_size;
-    const uint8_t* row = base + (index * header->row_size);
-    return reinterpret_cast<const T*>(row);
 }
 
 } // namespace sp
