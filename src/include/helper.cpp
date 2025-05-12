@@ -13,28 +13,28 @@ namespace sp {
 // RTTI constants and structures 
 namespace cb {
     enum LayoutCode : uint8_t {
-        kBool,
-        kInt32,
-        kFloat32,
-        kChar8,
-        kAny,
-        kTopFunction,
-        kFunction,
-        kArray,
-        kFixedArray,
-        kEnumStruct,
+        // kBool,
+        // kInt32,
+        // kFloat32,
+        // kChar8,
+        // kAny,
+        // kTopFunction,
+        // kFunction,
+        // kArray,
+        // kFixedArray,
+        // kEnumStruct,
         kStruct,
         kMethodmap,
-        kEnum,
-        kTypedef,
-        kClassdef,
+        // kEnum,
+        // kTypedef,
+        // kClassdef,
         kMax
     };
 }
 
 enum {
-    kTypeId_Inline = 0,
-    kTypeId_Complex,
+    // kTypeId_Inline = 0,
+    // kTypeId_Complex,
     kTypeId_Complex2,
     kTypeId_Bool,
     kTypeId_Int32,
@@ -53,54 +53,54 @@ enum {
     DISP_FLOAT = 0x70
 };
 
-struct smx_rtti_field {
-    uint32_t name;
-    uint32_t type_id;
-    uint32_t flags;
-};
+// struct smx_rtti_field {
+//     uint32_t name;
+//     uint32_t type_id;
+//     uint32_t flags;
+// };
 
-struct smx_rtti_es_field {
-    uint32_t name;
-    uint32_t type_id;
-    uint32_t offset;
-    uint32_t flags;
-};
+// struct smx_rtti_es_field {
+//     uint32_t name;
+//     uint32_t type_id;
+//     uint32_t offset;
+//     uint32_t flags;
+// };
 
-struct smx_rtti_enum {
-    uint32_t name;
-    uint32_t flags;
-};
+// struct smx_rtti_enum {
+//     uint32_t name;
+//     uint32_t flags;
+// };
 
-struct smx_rtti_enumstruct {
-    uint32_t name;
-    uint32_t first_field;
-    uint32_t size;
-    uint32_t flags;
-};
+// struct smx_rtti_enumstruct {
+//     uint32_t name;
+//     uint32_t first_field;
+//     uint32_t size;
+//     uint32_t flags;
+// };
 
-struct smx_rtti_classdef {
-    uint32_t name;
-    uint32_t first_field;
-    uint32_t flags;
-};
+// struct smx_rtti_classdef {
+//     uint32_t name;
+//     uint32_t first_field;
+//     uint32_t flags;
+// };
 
-struct smx_rtti_debug_var {
-    uint32_t name;
-    uint32_t type_id;
-    uint32_t code_start;
-    uint32_t code_end;
-    uint32_t address;
-    uint8_t vclass;
-    uint8_t padding[3];
-};
+// struct smx_rtti_debug_var {
+//     uint32_t name;
+//     uint32_t type_id;
+//     uint32_t code_start;
+//     uint32_t code_end;
+//     uint32_t address;
+//     uint8_t vclass;
+//     uint8_t padding[3];
+// };
 
-struct smx_rtti_table_header {
-    uint8_t magic[4];
-    uint32_t version;
-    uint32_t header_size;
-    uint32_t row_size;
-    uint32_t row_count;
-};
+// struct smx_rtti_table_header {
+//     uint8_t magic[4];
+//     uint32_t version;
+//     uint32_t header_size;
+//     uint32_t row_size;
+//     uint32_t row_count;
+// };
 
 // Symbol class implementation
 Symbol::Symbol(sp_fdbg_symbol_t* sym, SmxV1Image* image)
