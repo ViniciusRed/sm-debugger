@@ -99,11 +99,19 @@ set_target_properties(${OUTPUT_NAME} PROPERTIES
     CXX_EXTENSIONS ON
 )
 
+# Create a custom include directory for zlib
+include_directories(BEFORE "${CMAKE_BINARY_DIR}/include")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/include/zlib")
+file(CREATE_LINK "${ZLIB_INCLUDE_DIR}/zlib.h" "${CMAKE_BINARY_DIR}/include/zlib/zlib.h" SYMBOLIC)
+
+
 # Diretórios de include
 target_include_directories(${OUTPUT_NAME} PRIVATE 
     ${BRYNET_INCLUDE_DIRS}
     ${ZLIB_INCLUDE_DIR}
+    "${CMAKE_BINARY_DIR}/include"  # Add this line to include our custom directory
 )
+
 target_include_directories(${OUTPUT_NAME} PUBLIC 
     "src"
     "src/include"
