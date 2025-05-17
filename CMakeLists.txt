@@ -6,7 +6,14 @@ project(sm_debugger)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(fmt CONFIG REQUIRED)
-find_path(BRYNET_INCLUDE_DIRS "brynet/Version.hpp") 
+find_path(BRYNET_INCLUDE_DIRS "brynet/Version.hpp"
+    HINTS
+        "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg_installed/x86-linux-sm/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg_installed/x86-linux-sm/include"
+    PATH_SUFFIXES 
+        include
+        brynet
+)
 
 # Configuração do SDK
 if(NOT SDK)
