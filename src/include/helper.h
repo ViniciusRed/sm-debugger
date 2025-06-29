@@ -67,15 +67,13 @@ class ArrayDim
     uint32_t size_; /**< Size of dimension */
 };
 
-class SymbolIterator
-{
-  public:
-    SymbolIterator(uint8_t* start, uint32_t debug_symbols_section_size, int type, SmxV1Image* image);
 
+class SymbolIterator {
+public:
+    SymbolIterator(uint8_t* start, uint32_t section_size, int type, SmxV1Image* image);
     bool Done();
     Symbol* Next();
-
-  private:
+private:
     uint8_t* cursor_;
     uint8_t* cursor_end_;
     uint32_t index_;
@@ -83,8 +81,18 @@ class SymbolIterator
     SmxV1Image* image_;
 };
 
+// Nova assinatura: o debugger deve passar os ponteiros/tamanhos explicitamente
+SymbolIterator symboliterator(
+    SmxV1Image* image,
+    uint8_t* packed_syms, uint32_t packed_syms_size,
+    uint8_t* unpacked_syms, uint32_t unpacked_syms_size,
+    uint8_t* rtti_locals, uint32_t rtti_locals_size,
+    uint8_t* rtti_globals, uint32_t rtti_globals_size,
+    bool global
+);
+
 // Function declarations
-SymbolIterator symboliterator(SmxV1Image* image, bool global);
+// Veja acima: nova assinatura
 bool GetVariable(SmxV1Image* image, const char* symname, uint32_t scopeaddr, std::unique_ptr<Symbol>& sym);
 const char* GetTagName(SmxV1Image* image, int16_t tag_id);
 std::vector<void*> getEnumFields(SmxV1Image* image, uint32_t enum_id);

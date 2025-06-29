@@ -398,20 +398,14 @@ public:
             }
 
             case cb::kEnumStruct: {
-                auto fields = current_image->getEnumFields(rtti->index());
+                auto fields = sp::getTypeFields(current_image.get(), rtti->index());
                 if (!fields.empty()) {
                     uint32_t start = addr;
                     for (auto& field : fields) {
                         if (!field) continue;
-
-                        auto name = current_image->GetDebugName(field->name);
+                        auto name = sp::GetDebugName(current_image.get(), ((const smx_rtti_es_field*)field)->name);
                         if (!name) continue;
-
-                        auto rtti_field = current_image->rttidata()->typeFromTypeId(field->type_id);
-                        if (!rtti_field) continue;
-
-                        auto field_json = read_variable(start, rtti_field->type(),
-                            (sp::debug::Rtti*)rtti_field);
+                        auto field_json = read_variable(start, 0, nullptr);
                         if (!field_json.is_null()) {
                             json[name] = field_json;
                         }
@@ -421,21 +415,14 @@ public:
             }
 
             case cb::kClassdef: {
-                auto fields = current_image->getTypeFields(rtti->index());
+                auto fields = sp::getTypeFields(current_image.get(), rtti->index());
                 if (!fields.empty()) {
                     uint32_t field_offset = addr;
                     for (auto& field : fields) {
                         if (!field) continue;
-
-                        uint32_t start = field_offset;
-                        auto name = current_image->GetDebugName(field->name);
+                        auto name = sp::GetDebugName(current_image.get(), ((const smx_rtti_field*)field)->name);
                         if (!name) continue;
-
-                        auto rtti_field = current_image->rttidata()->typeFromTypeId(field->type_id);
-                        if (!rtti_field) continue;
-
-                        auto field_json = read_variable(start, rtti_field->type(),
-                            (sp::debug::Rtti*)rtti_field, true);
+                        auto field_json = read_variable(field_offset, 0, nullptr);
                         if (!field_json.is_null()) {
                             json[name] = field_json;
                         }
@@ -497,7 +484,7 @@ public:
 
         // set default display type for the symbol (if none was set)
         if ((sym->vclass() & ~DISP_MASK) == 0) {
-            const char* tagname = current_image->GetTagName(sym->tagid());
+            const char* tagname = sp::GetTagName(current_image.get(), sym->tagid());
             if (tagname != nullptr) {
                 if (!strcasecmp(tagname, "bool")) {
                     sym->setVClass(sym->vclass() | DISP_BOOL);
@@ -533,7 +520,7 @@ public:
             || sym->ident() == sp::IDENT_REFARRAY) {
             int dim;
             symdims = std::make_unique<std::vector<sp::ArrayDim*>>(
-                *current_image->GetArrayDimensions(sym));
+                *sp::GetArrayDimensions(current_image.get(), sym));
             // check whether any of the indices are out of range
             assert(symdims != nullptr);
             for (dim = 0; dim < idxlevel; dim++) {
@@ -637,7 +624,7 @@ public:
             auto imagev1 = current_image.get();
 
             std::unique_ptr<sp::Symbol> sym;
-            if (imagev1->GetVariable(variable, cip_, sym)) {
+            if (sp::GetVariable(imagev1, variable, cip_, sym)) {
                 uint32_t idx[MAX_DIMS], dim;
                 dim = 0;
                 memset(idx, 0, sizeof idx);
@@ -705,8 +692,9 @@ public:
         }
 
         std::unique_ptr<std::vector<sp::ArrayDim*>> dims;
+        // Remove const para passar para o helper
         dims = std::make_unique<std::vector<sp::ArrayDim*>>(
-            *current_image->GetArrayDimensions(sym));
+            *sp::GetArrayDimensions(current_image.get(), const_cast<sp::Symbol*>(sym)));
         return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL)
             == SP_ERROR_NONE;
     }
@@ -722,7 +710,7 @@ public:
             cell_t result = 0;
             value.erase(remove(value.begin(), value.end(), '\"'),
                 value.end());
-            if (imagev1->GetVariable(var.c_str(), cip_, sym)) {
+            if (sp::GetVariable(imagev1, var.c_str(), cip_, sym)) {
                 if ((sym->ident() == IDENT_ARRAY
                     || sym->ident() == IDENT_REFARRAY)) {
                     if ((sym->vclass() & ~DISP_MASK) == DISP_STRING) {
@@ -758,7 +746,7 @@ public:
                 }
 
                 if (valid_value
-                    && (imagev1->GetVariable(var.c_str(), cip_, sym))) {
+                    && (sp::GetVariable(imagev1, var.c_str(), cip_, sym))) {
                     success = set_symbolvalue(sym.get(), index, (cell_t)result);
                 }
             }
@@ -790,11 +778,20 @@ public:
                 memset(idx, 0, sizeof idx);
                 std::vector<variable_s> vars;
                 if (local_scope || global_scope) {
-                    sp::SymbolIterator iter
-                        = imagev1->symboliterator(global_scope);
+                    // Ponteiros públicos para RTTI locals/globals (ajuste conforme métodos públicos disponíveis)
+                    const smx_rtti_table_header* rtti_locals = nullptr;
+                    const smx_rtti_table_header* rtti_globals = nullptr;
+                    // TODO: Se existirem métodos públicos, obtenha os ponteiros aqui
+                    sp::SymbolIterator iter = sp::symboliterator(
+                        imagev1,
+                        nullptr, 0, // packed_syms
+                        nullptr, 0, // unpacked_syms
+                        (uint8_t*)rtti_locals, rtti_locals ? (rtti_locals->row_count * rtti_locals->row_size) : 0,
+                        (uint8_t*)rtti_globals, rtti_globals ? (rtti_globals->row_count * rtti_globals->row_size) : 0,
+                        global_scope
+                    );
                     while (!iter.Done()) {
                         const auto sym = iter.Next();
-
                         // Only variables in scope.
                         if (sym->ident() != sp::IDENT_FUNCTION
                             && (sym->codestart() <= (uint32_t)cip_
@@ -815,7 +812,7 @@ public:
                     }
                 }
                 else {
-                    if (imagev1->GetVariable(scope, cip_, sym)) {
+                    if (sp::GetVariable(imagev1, scope, cip_, sym)) {
                         auto var = display_variable(sym.get(), idx, dim, true);
                         std::string var_name = scope;
                         auto values = split_string(var.value, ",");
@@ -1059,9 +1056,9 @@ public:
         AskFile()
     {
         CUtlBuffer buffer;
-        buffer.PutUnsignedInt(0); 
+        buffer.PutUnsignedInt(0);
         {
-            buffer.PutChar(MessageType::RequestFile); 
+            buffer.PutChar(MessageType::RequestFile);
         }
         *(uint32_t*)buffer.Base() = buffer.TellPut() - 5;
 

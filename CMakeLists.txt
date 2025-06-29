@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.18)
 
 project(sm_debugger)
 
+# Adicionar flags globalmente
+if(MSVC)
+    add_compile_options(/W0)
+else()
+    add_compile_options(-w)
+endif()
+
 # Encontrar dependências
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
