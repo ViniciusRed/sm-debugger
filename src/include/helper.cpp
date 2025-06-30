@@ -2,6 +2,8 @@
 #include "smx-v1-image.h"
 #include <sp_vm_types.h>
 #include <sp_vm_api.h>
+#include <rtti.h>
+#include <smx/smx-legacy-debuginfo.h>
 #include <assert.h>
 #include <string>
 #include <functional>
@@ -9,8 +11,8 @@
 #include <vector>
 
 namespace sp {
-  
-      // RTTI constants and structures 
+
+    // RTTI constants and structures 
     namespace cb {
         enum LayoutCode : uint8_t {
             // kBool,
@@ -572,9 +574,34 @@ namespace sp {
     }
 
     // Gets RTTI data from the SmxV1Image
-    void* rttidata(SmxV1Image* image) {
-        // Return null since we can't access private members
-        return nullptr;
+    std::vector<void*> getTypeFields(SmxV1Image* image, uint32_t type_id) {
+        // Tente obter as tabelas RTTI via métodos públicos, se existirem
+        if (!image)
+            return {};
+        const smx_rtti_table_header* classdefs = nullptr;
+        const smx_rtti_table_header* fields = nullptr;
+        // Exemplo: se a API pública fornecer métodos, use-os aqui
+        // classdefs = image->GetRttiClassDefs();
+        // fields = image->GetRttiFields();
+        // Se não houver API, retorna vazio
+        if (!classdefs || !fields)
+            return {};
+        return getTypeFields(classdefs, fields, type_id);
+    }
+
+    std::vector<void*> getEnumFields(SmxV1Image* image, uint32_t index) {
+        // Tente obter as tabelas RTTI via métodos públicos, se existirem
+        if (!image)
+            return {};
+        const smx_rtti_table_header* enumstructs = nullptr;
+        const smx_rtti_table_header* enumstruct_fields = nullptr;
+        // Exemplo: se a API pública fornecer métodos, use-os aqui
+        // enumstructs = image->GetRttiEnumStructs();
+        // enumstruct_fields = image->GetRttiEnumStructFields();
+        // Se não houver API, retorna vazio
+        if (!enumstructs || !enumstruct_fields)
+            return {};
+        return getEnumFields(enumstructs, enumstruct_fields, index);
     }
 
     // Gets a type from type ID in the SmxV1Image

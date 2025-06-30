@@ -31,10 +31,6 @@
 #include <brynet/net/wrapper/ConnectionBuilder.hpp>
 #include <brynet/net/wrapper/ServiceBuilder.hpp>
 
-#include <sp_vm_types.h>
-#include <smx-v1-image.h>
-#include <rtti.h>
-#include <smx/smx-legacy-debuginfo.h>
 #include <helper.h>
 #include <nlohmann/json.hpp>
 
@@ -398,7 +394,7 @@ public:
             }
 
             case cb::kEnumStruct: {
-                auto fields = sp::getTypeFields(current_image.get(), rtti->index());
+                auto fields = sp::getEnumFields(current_image.get(), rtti->index());
                 if (!fields.empty()) {
                     uint32_t start = addr;
                     for (auto& field : fields) {
@@ -420,7 +416,7 @@ public:
                     uint32_t field_offset = addr;
                     for (auto& field : fields) {
                         if (!field) continue;
-                        auto name = sp::GetDebugName(current_image.get(), ((const smx_rtti_field*)field)->name);
+                        auto name = sp::GetDebugName(current_image.get(), ((const smx_rtti_es_field*)field)->name);
                         if (!name) continue;
                         auto field_json = read_variable(field_offset, 0, nullptr);
                         if (!field_json.is_null()) {
@@ -692,7 +688,6 @@ public:
         }
 
         std::unique_ptr<std::vector<sp::ArrayDim*>> dims;
-        // Remove const para passar para o helper
         dims = std::make_unique<std::vector<sp::ArrayDim*>>(
             *sp::GetArrayDimensions(current_image.get(), const_cast<sp::Symbol*>(sym)));
         return context_->StringToLocalUTF8(base, dims->at(0)->size(), str, NULL)
@@ -792,6 +787,7 @@ public:
                     );
                     while (!iter.Done()) {
                         const auto sym = iter.Next();
+
                         // Only variables in scope.
                         if (sym->ident() != sp::IDENT_FUNCTION
                             && (sym->codestart() <= (uint32_t)cip_
