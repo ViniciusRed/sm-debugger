@@ -43,7 +43,7 @@ include_directories("${SM_PATH}/public/amtl/amtl")
 
 # Add a executable file #
 function(add_extension ext_name)
-    if(ARGC LESS 3)
+    if(ARGC LESS 2)
         message(FATAL_ERROR "Missing arguments for add_extension")
     endif()
 
@@ -60,8 +60,8 @@ function(add_extension ext_name)
         # Lesser than 3.15
         if(${CMAKE_VERSION} VERSION_LESS "3.15.0")
             # Warning D9025
-            target_compile_options(${OUTPUT_NAME} PUBLIC "$<$<CONFIG:Debug>:/MTd>")
-            target_compile_options(${OUTPUT_NAME} PUBLIC "$<$<CONFIG:Release>:/MT>")
+            target_compile_options(${ext_name} PUBLIC "$<$<CONFIG:Debug>:/MTd>")
+            target_compile_options(${ext_name} PUBLIC "$<$<CONFIG:Release>:/MT>")
         else()
             set_target_properties(${ext_name} PROPERTIES MSVC_RUNTIME_LIBRARY
                                   "MultiThreaded$<$<CONFIG:Debug>:Debug>")
